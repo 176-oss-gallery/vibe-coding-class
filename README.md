@@ -22,14 +22,20 @@
 
 공개되는 파일 이름과 갤러리 화면에는 **학번·이름이 나오지 않습니다.** 대응표(`private/mapping.csv`)는 선생님 컴퓨터에만 있고 저장소에 올라가지 않습니다(`.gitignore`로 제외).
 
+## 왜 별도 조직에 두는가
+
+브라우저는 `176-oss.github.io` 아래의 모든 페이지를 저장소와 상관없이 같은 사이트로 봅니다. 같은 사이트의 페이지끼리는 브라우저 저장소(로그인 토큰, API 키, 앱 데이터)를 함께 볼 수 있습니다. 그래서 학생 작품은 교사용 앱(`176-oss.github.io`의 출결, 생기부)과 다른 사이트인 `176-oss-gallery` 조직에 둡니다. 게임 파일 주소를 주소창에 직접 열면 갤러리의 sandbox 밖에서 실행되므로, 주소를 분리하는 것이 유일한 확실한 방어입니다.
+
+> **주의:** 이 저장소를 `176-oss` 계정 아래로 되돌리지 마세요. 학생 작품, 외부에서 받은 HTML, 시험용 페이지를 `176-oss.github.io` 아래에 올리지 마세요.
+
 ## 처음 한 번만 하는 준비
 
 1. **Python 확인:** 터미널에서 `python --version`(윈도우는 `py --version`)을 입력해 3.9 이상인지 확인합니다.
 2. **첫 화면 그림 도구 설치(권장):** `pip install playwright` 후 `playwright install chromium`. 갤러리에 게임 첫 화면을 그림으로 보여 주는 데 씁니다. 설치하지 않으면 그림 대신 색 카드에 게임 이름이 나옵니다.
-3. **저장소 받기:** `git clone https://github.com/176-oss/vibe-coding-class` 후 그 폴더로 이동합니다.
+3. **저장소 받기:** `git clone https://github.com/176-oss-gallery/vibe-coding-class` 후 그 폴더로 이동합니다.
 4. **학생 명단(선택):** `private/roster.csv`를 만들고 첫 줄에 `학번,이름`, 아래에 학생을 한 줄씩 적습니다. 미제출 명단과 다른 학생 이름 점검에 쓰입니다. (`private/`는 올라가지 않습니다.)
 5. **금칙어(선택):** `tools/banned_words.example.txt`를 `private/banned_words.txt`로 복사해 한 줄에 하나씩 학교 기준에 맞게 채웁니다.
-6. **GitHub Pages 켜기:** 저장소의 Settings → Pages → Source를 **GitHub Actions**로 선택합니다. 이후 `main`에 `site/` 변경이 올라가면 자동 배포됩니다. 주소는 보통 `https://176-oss.github.io/vibe-coding-class/` 입니다.
+6. **GitHub Pages 켜기:** 저장소의 Settings → Pages → Source를 **GitHub Actions**로 선택합니다. 이후 `main`에 `site/` 변경이 올라가면 자동 배포됩니다. 주소는 `https://176-oss-gallery.github.io/vibe-coding-class/` 입니다.
 7. **앱 설정:** `site/index.html` 맨 위 `CONFIG`에 폼 주소(`FORM1_URL`~`FORM4_URL`, 현재 주소가 이미 들어 있습니다)를 넣습니다. 비워 두면 해당 버튼이 비활성으로 보입니다. 학생 접속 주소는 `…/vibe-coding-class/` 입니다(앱이 메인 화면).
 8. **구글 폼 4개 만들기:** `docs/FORMS.md`를 따라 만듭니다.
 
