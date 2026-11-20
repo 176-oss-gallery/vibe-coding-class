@@ -305,11 +305,32 @@ function makeDeps(over) {
     now: () => new Date(st.t += 1000),
     readConfig: () => Object.assign({}, st.cfg),
     rateLimit: () => st.rateOk,
-    discardFile: (id) => { st.discarded.push(id); },
+    // 진짜 드라이브처럼: 휴지통으로 보낸 파일은 목록에서 빠지고, 이름 바꾸기는 같은 파일의 이름만 바꿈
+    discardFile: (id) => {
+      st.discarded.push(id);
+      for (const [n, f] of st.files) if (f.id === id) st.files.delete(n);
+    },
+    renameFile: (id, name) => {
+      for (const [n, f] of st.files) {
+        if (f.id !== id) continue;
+        if (st.files.has(name)) throw new Error('덮어쓰기 시도: ' + name);
+        st.files.delete(n);
+        st.files.set(name, f);
+        return;
+      }
+      throw new Error('없는 파일: ' + id);
+    },
     verifyToken: (tok) => (Object.prototype.hasOwnProperty.call(TOKENS, tok)
       ? Object.assign({ ok: true }, TOKENS[tok], { email: TOKENS[tok].email.toLowerCase() })
       : { ok: false, code: 'TOKEN_INVALID' }),
     readRoster: () => Object.assign({}, st.roster),
+    markReset: (id, at) => {
+      const a = st.accounts.find((x) => x.id === id);
+      if (!a) return false;
+      a.reset = true; a.resetAt = at;
+      return true;
+    },
+    lockedIds: (ids) => ids.filter((id) => (st.fails[id] || 0) >= 5),
     upsertRoster: (id, name) => { st.roster[id] = name; st.rosterAuto = (st.rosterAuto || 0) + 1; },
     readBindings: () => st.bindings.map((r) => Object.assign({}, r)),
     appendBinding: (row) => { st.bindings.push(Object.assign({}, row)); },
@@ -672,6 +693,25 @@ test('submit: 잘못된 requestId → BAD_REQUEST', () => {
   assert.strictEqual(st.files.size, 2);
 });
 
+test('submit: Submissions 는 잠금 안에서만 읽음 (잠금 밖에서 먼저 읽으면 버전이 겹침)', () => {
+  const { deps, st } = makeDeps();
+  call(deps, { action: 'bind', idToken: A, studentId: '10101', name: '김하늘' });
+  const orig = deps.readSubmissions;
+  let outside = 0;
+  deps.readSubmissions = () => { if (!st.inLock) outside++; return orig(); };
+  for (let i = 0; i < 3; i++) {
+    const r = call(deps, { action: 'submit', idToken: A, html: PAGE, requestId: 'q' + i });
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.version, i + 1);
+  }
+  // 재전송도 잠금 안에서 확인하고, 만든 파일은 버림
+  const d = call(deps, { action: 'submit', idToken: A, html: PAGE, requestId: 'q0' });
+  assert.strictEqual(d.duplicate, true);
+  assert.strictEqual(d.version, 1);
+  assert.strictEqual(st.files.size, 3);
+  assert.strictEqual(outside, 0, '잠금 밖에서 Submissions 를 읽으면 안 됨');
+});
+
 test('submit: 제출 빈도 제한 → BUSY (다른 안내 문구)', () => {
   const { deps, st } = makeDeps();
   call(deps, { action: 'bind', idToken: A, studentId: '10101', name: '김하늘' });
@@ -685,6 +725,43 @@ test('submit: 제출 빈도 제한 → BUSY (다른 안내 문구)', () => {
   assert.strictEqual(st.files.size, 0);
 });
 
+test('submit: 드라이브 저장은 잠금 밖에서, 잠금 안에서는 기록만', () => {
+  const { deps, st } = makeDeps();
+  call(deps, { action: 'bind', idToken: A, studentId: '10101', name: '김하늘' });
+  let inLock = false, savedInLock = null;
+  const tl = deps.tryLock, rl = deps.releaseLock, sf = deps.saveFile;
+  deps.tryLock = () => { inLock = true; return tl(); };
+  deps.releaseLock = () => { inLock = false; return rl(); };
+  deps.saveFile = (n, t) => { savedInLock = inLock; return sf(n, t); };
+  const r = call(deps, { action: 'submit', idToken: A, html: PAGE });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(savedInLock, false, '드라이브 저장이 잠금 안에서 일어남');
+  // 잠금을 못 잡으면 만든 파일은 휴지통으로
+  st.lockOk = false;
+  assert.strictEqual(call(deps, { action: 'submit', idToken: A, html: PAGE }).code, 'BUSY');
+  assert.strictEqual(st.files.size, 1, '잠금 실패 때 만든 파일이 남음');
+});
+
+test('submit: 같은 requestId 가 동시에 두 번 와도 기록·파일은 하나', () => {
+  const { deps, st } = makeDeps();
+  call(deps, { action: 'bind', idToken: A, studentId: '10101', name: '김하늘' });
+  const rid = 'same-req-1';
+  // 첫 요청이 잠금 밖 확인을 지난 뒤, 잠금 직전에 다른 요청이 같은 requestId 로 먼저 기록한 상황
+  const tl = deps.tryLock;
+  let injected = false;
+  deps.tryLock = () => {
+    if (!injected) {
+      injected = true;
+      st.subs.push({ at: new Date(st.t), id: '10101', email: 'alice@school.kr', version: 1, fileId: 'other', size: 1, sha256: 'abc', requestId: rid });
+    }
+    return tl();
+  };
+  const r = call(deps, { action: 'submit', idToken: A, html: PAGE, requestId: rid });
+  assert.strictEqual(r.duplicate, true, JSON.stringify(r));
+  assert.strictEqual(st.subs.length, 1);
+  assert.strictEqual(st.files.size, 0, '중복이면 방금 만든 파일은 휴지통으로');
+});
+
 test('submit: 기록 실패 시 방금 만든 파일 폐기 → SERVER_ERROR', () => {
   const { deps, st } = makeDeps();
   call(deps, { action: 'bind', idToken: A, studentId: '10101', name: '김하늘' });
@@ -692,7 +769,7 @@ test('submit: 기록 실패 시 방금 만든 파일 폐기 → SERVER_ERROR', (
   const r = call(deps, { action: 'submit', idToken: A, html: PAGE });
   assert.strictEqual(r.code, 'SERVER_ERROR');
   assert.strictEqual(st.discarded.length, 1);
-  assert.strictEqual(st.discarded[0], [...st.files.values()][0].id);
+  assert.strictEqual(st.files.size, 0, '만든 파일은 휴지통으로');
   assert.strictEqual(st.locks, st.releases);
   // 폐기까지 실패해도 SERVER_ERROR
   deps.discardFile = () => { throw new Error('drive'); };
@@ -739,6 +816,100 @@ function teacherReset(st, id, agoMs) {
   a.reset = true;
   a.resetAt = new Date(st.t - (agoMs || 0));
 }
+
+test('관리자 목록: 학번·이름으로 찾기, 제출 수·최근 제출, 해시·솔트는 내보내지 않음', () => {
+  const accounts = [
+    { id: '20316', name: '이바다', hash: 'H1', salt: 'S1', at: new Date('2026-11-20T01:00:00Z'), reset: false },
+    { id: '20315', name: '김 하늘', hash: 'H2', salt: 'S2', at: '', reset: true }
+  ];
+  const subs = [
+    { id: '20315', at: new Date('2026-11-20T02:00:00Z') },
+    { id: '20315', at: new Date('2026-11-20T03:00:00Z') },
+    { id: '99999', at: new Date('2026-11-20T03:00:00Z') }
+  ];
+  let r = J(G.adminRows(accounts, subs, '', ['20316']));
+  assert.strictEqual(r.total, 2);
+  eq(r.rows.map((x) => x.id), ['20315', '20316'], '학번 순');
+  eq(r.rows[0], { id: '20315', name: '김 하늘', registeredAt: '', reset: true, locked: false, count: 2, lastAt: '2026-11-20T03:00:00.000Z' });
+  assert.strictEqual(r.rows[1].locked, true);
+  assert.ok(!JSON.stringify(r).includes('H1') && !JSON.stringify(r).includes('S2'), '해시·솔트 노출');
+  eq(J(G.adminRows(accounts, subs, '김하늘', [])).rows.map((x) => x.id), ['20315'], '이름 공백 무시');
+  eq(J(G.adminRows(accounts, subs, '0316', [])).rows.map((x) => x.id), ['20316'], '학번 일부');
+  eq(J(G.adminRows(accounts, subs, '없는사람', [])).rows, []);
+});
+
+test('관리자 zip: 학번마다 최신 버전만, 반 단위, 파일 ID 없는 행 제외', () => {
+  const subs = [
+    { id: '31040', version: 1, fileId: 'f1' }, { id: '31040', version: 3, fileId: 'f3' }, { id: '31040', version: 2, fileId: 'f2' },
+    { id: '31001', version: 1, fileId: 'g1' }, { id: '21005', version: 1, fileId: 'h1' },
+    { id: '31002', version: 1, fileId: '' }, { id: 'bad', version: 1, fileId: 'x' }
+  ];
+  eq(J(G.adminLatest(subs, '310')).map((x) => [x.id, x.version, x.fileId, x.name]),
+    [['31001', 1, 'g1', '31001_v1.html'], ['31040', 3, 'f3', '31040_v3.html']]);
+  eq(J(G.adminLatest(subs, '')).map((x) => x.id), ['21005', '31001', '31040'], '전체');
+  const deps = {
+    readSubmissions: () => subs,
+    zipFiles: (items) => { deps.got = items; return { b64: 'UEsDBA==' }; }
+  };
+  let r = J(G.adminHandle(deps, 'classes', ''));
+  eq(r.classes.map((c) => [c.key, c.label, c.count]), [['210', '2학년 10반', 1], ['310', '3학년 10반', 2]]);
+  r = J(G.adminHandle(deps, 'zip', '310'));
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(r.name, 'submissions_310.zip');
+  assert.strictEqual(r.count, 2);
+  eq(deps.got, [{ name: '31001_v1.html', fileId: 'g1' }, { name: '31040_v3.html', fileId: 'f3' }]);
+  assert.strictEqual(J(G.adminHandle(deps, 'zip', '399')).code, 'BAD_REQUEST');
+  assert.strictEqual(J(G.adminHandle(deps, 'zip', '../x')).code, 'BAD_REQUEST');
+  assert.strictEqual(J(G.adminHandle(deps, 'zip', '110')).code, 'NOT_FOUND');
+  deps.zipFiles = () => ({ b64: 'A'.repeat(G.ADMIN_ZIP_MAX_B64 + 1) });
+  assert.strictEqual(J(G.adminHandle(deps, 'zip', '310')).code, 'TOO_BIG');
+});
+
+test('관리자 비밀번호: 맞으면 통과, 5번 틀리면 잠김, 설정이 없으면 거부, 맞아도 잠긴 동안은 거부', () => {
+  let fails = 0, pw = 'teacher-PW-9';
+  const deps = { getAdminPassword: () => pw, getFails: () => fails, putFails: (n) => { fails = n; }, clearFails: () => { fails = 0; } };
+  assert.strictEqual(G.adminPasswordCheck(deps, 'nope'), 'WRONG');
+  assert.strictEqual(G.adminPasswordCheck(deps, 'teacher-PW-9'), 'OK');
+  assert.strictEqual(fails, 0, '성공하면 실패 횟수 초기화');
+  for (let i = 0; i < 5; i++) assert.strictEqual(G.adminPasswordCheck(deps, 'bad' + i), 'WRONG');
+  assert.strictEqual(G.adminPasswordCheck(deps, 'teacher-PW-9'), 'LOCKED');
+  fails = 0;
+  for (const bad of [undefined, null, 5, {}, 'x'.repeat(500), '']) { fails = 0; assert.strictEqual(G.adminPasswordCheck(deps, bad), 'WRONG'); }
+  pw = '';
+  assert.strictEqual(G.adminPasswordCheck(deps, ''), 'NONE', '설정 없으면 빈 비밀번호도 거부');
+});
+
+test('관리자 화면: 스크립트 문법이 맞고 서버 호출 이름이 실제 함수와 맞음', () => {
+  const m = /<script>([\s\S]*)<\/script>/.exec(G.ADMIN_HTML);
+  assert.ok(m, '스크립트 없음');
+  new vm.Script(m[1]); // 문법 오류면 여기서 던짐
+  for (const fn of ['adminInfo', 'adminList', 'adminReset', 'adminClasses', 'adminZip']) {
+    assert.strictEqual(typeof G[fn], 'function', fn);
+    assert.ok(G.ADMIN_HTML.includes('.' + fn + '('), '화면이 ' + fn + ' 를 부르지 않음');
+  }
+  assert.ok(!/<script[^>]+src=|https?:\/\//.test(G.ADMIN_HTML), '외부 요청 금지');
+});
+
+test('관리자 초기화: 비밀번호=학번, 잠금 해제, 없는 학번·잘못된 형식 거부', () => {
+  const { deps, st } = pwDeps();
+  pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
+  for (let i = 0; i < 5; i++) pcall(deps, { action: 'login', studentId: '10101', password: 'wrong-PW-' + i });
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).code, 'LOCKED');
+  let list = J(G.adminHandle(deps, 'list', '10101'));
+  assert.strictEqual(list.rows[0].locked, true, '잠김 표시');
+  const r = J(G.adminHandle(deps, 'reset', '10101'));
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(st.accounts[0].reset, true);
+  assert.ok(st.accounts[0].resetAt, '초기화시각');
+  assert.strictEqual(st.fails['10101'], undefined, '잠금 해제');
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: '10101' }).ok, true, '학번으로 로그인');
+  list = J(G.adminHandle(deps, 'list', ''));
+  assert.strictEqual(list.rows[0].reset, true);
+  assert.strictEqual(J(G.adminHandle(deps, 'reset', '10109')).code, 'NOT_REGISTERED');
+  assert.strictEqual(J(G.adminHandle(deps, 'reset', '4x')).code, 'BAD_REQUEST');
+  assert.strictEqual(J(G.adminHandle(deps, 'drop', '10101')).code, 'BAD_REQUEST');
+  assert.strictEqual(st.locks, st.releases);
+});
 
 test('명단 없이 시작(roster_required=FALSE): 처음 등록하면 명단에 자동 추가, 이후엔 그 이름과 같아야 함', () => {
   const { deps, st } = pwDeps();
@@ -1031,8 +1202,10 @@ test('Code.gs: onEdit·setup 페퍼 보호·세션 키는 해시', () => {
 
 // ═════════ 정적 검사 ═════════
 
-test('Code.gs: HtmlService·eval·new Function 없음', () => {
-  assert.ok(!/HtmlService/.test(SRC));
+test('Code.gs: HtmlService 는 관리자 화면(고정 문자열)에만, eval·new Function 없음', () => {
+  const uses = SRC.split('\n').filter((l) => /HtmlService/.test(l) && !/^\s*(\/\/|\*)/.test(l));
+  assert.ok(uses.length >= 1);
+  for (const l of uses) assert.ok(/createHtmlOutput\((ADMIN_HTML|ADMIN_DENIED_HTML)\)/.test(l), '관리자 화면 외 HtmlService: ' + l.trim());
   assert.ok(!/\beval\s*\(/.test(SRC));
   assert.ok(!/new\s+Function\b/.test(SRC));
 });
