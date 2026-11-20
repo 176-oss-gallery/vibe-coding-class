@@ -119,6 +119,7 @@ with sync_playwright() as p:
     pg.wait_for_function('document.getElementById("ns_t1").innerText.includes("아직")')
     ok('로그인 뒤 제출 현황 표시', '아직 제출하지 않았어요' in pg.inner_text('#ns_t1'))
     ok('로그인만으로는 서약 전', pg.inner_text('#pchip') == '서약 전')
+    ok('할 일 목록: 서약 전에는 서약 칸이 먼저 할 일', pg.eval_on_selector('#t1 .todo li[data-todo=sign]', 'e=>e.classList.contains("go") && !e.classList.contains("done")'))
     # 서약 서명
     pg.click('#signbtn'); ok('팝업 열림', is_on(pg, '#pov'))
     pg.screenshot(path=OUT + 'modal.png')
@@ -178,6 +179,7 @@ with sync_playwright() as p:
     pg.click('#nb_t1'); pg.wait_for_function('document.getElementById("ns_t1").innerText.includes("제출했어요")')
     n1 = [n for n in fake.notes if n[1] == 't1']
     ok('1차시 제출: 서버로 글 전달', len(n1) == 1 and n1[0][0] == '20315' and '서명 완료' in n1[0][2] and '원소 퀴즈' in n1[0][2], n1[0][2][:60] if n1 else '')
+    ok('할 일 목록: 서약·1차시 제출에 체크', pg.eval_on_selector('#t1 .todo li[data-todo=sign]', 'e=>e.classList.contains("done")') and pg.eval_on_selector('#t1 .todo li[data-todo=t1]', 'e=>e.classList.contains("done")'))
     ok('제출 요청에 학번·비밀번호 없이 세션만', all('password' not in c and 'studentId' not in c for c in fake.calls if c['action'] in ('note', 'vote', 'submit', 'status')))
     # 2~3차시
     pg.click('#nav button[data-t=t2]')

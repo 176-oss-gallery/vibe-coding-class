@@ -126,6 +126,19 @@ td .btn{min-height:32px;padding:4px 10px}
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--tx);color:var(--card);padding:10px 18px;border-radius:10px;font-size:14.5px;font-weight:600;opacity:0;transition:opacity .25s;z-index:40;max-width:min(90vw,520px);pointer-events:none;text-align:center}
 #toast.on{opacity:1}
 
+/* 이번 시간에 할 일: 차시 맨 위의 짧은 순서 목록 */
+.todo{margin:18px 0 6px;padding:14px 16px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
+.todo b{display:block;font-size:14.5px;margin-bottom:6px}
+.todo ol{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px 8px}
+.todo li a{display:inline-flex;align-items:center;gap:7px;padding:6px 12px 6px 6px;border-radius:99px;background:var(--card);border:1px solid var(--line);color:var(--tx);text-decoration:none;font-size:14.5px;font-weight:600}
+.todo li a:hover{border-color:var(--pri)}
+.todo li a i{font-style:normal;width:24px;height:24px;border-radius:50%;border:2px solid var(--pri);color:var(--pri);display:inline-flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:800}
+.todo li.go a i{border-color:var(--warn);color:var(--warn)}
+.todo li.done a{color:var(--mut)}
+.todo li.done a i{background:var(--pri);color:var(--card);font-size:0}
+.todo li.done a i::after{content:"\2713";font-size:13px}
+.fld label .h{font-weight:400;color:var(--mut);font-size:13.5px;margin-left:4px}
+h3{scroll-margin-top:84px}
 @media(max-width:800px){.g2,.g3{grid-template-columns:1fr}}
 @media(max-width:640px){
   header h1{width:100%;font-size:16px}
@@ -166,7 +179,8 @@ td .btn{min-height:32px;padding:4px 10px}
 <!-- ===== 1차시 ===== -->
 <section class="tab on" id="t1">
   <h2>1차시 · 서약과 기획</h2>
-  <p class="sub">쓴 내용은 이 브라우저에 저절로 저장돼요. 다 쓰면 맨 아래 <b>[제출하기]</b>를 누르세요. 고쳐서 다시 내면 마지막 것이 쓰여요.</p>
+  <p class="sub">쓴 내용은 저절로 저장돼요. 아래 순서대로 하고, 마지막에 제출하면 끝이에요.</p>
+  <div class="todo" role="navigation" aria-label="이번 시간에 할 일"><b>이번 시간에 할 일</b><ol><li data-todo="sign"><a href="#signbox"><i>!</i>서약서 서명</a></li><li data-todo=""><a href="#s1-1"><i>1</i>아이디어 찾기</a></li><li data-todo=""><a href="#s1-2"><i>2</i>기획서 쓰기</a></li><li data-todo="t1"><a href="#nb_t1"><i>✓</i>제출하기</a></li></ol></div>
 
   <div class="notice warn" id="signbox">
     <b>제작 서약서에 서명해야 활동을 시작할 수 있어요.</b>
@@ -174,38 +188,38 @@ td .btn{min-height:32px;padding:4px 10px}
   </div>
 
   <div id="t1body" class="lock">
-  <h3>아이디어 찾기 <small>제미나이와 상의</small></h3>
-  <p class="sub">무엇을 만들지 정하기 어려우면 제미나이에게 아이디어를 물어보세요. 이미 정했다면 건너뛰고 2번으로 가요.</p>
+  <h3 id="s1-1">아이디어 찾기 <small>이미 정했으면 건너뛰어요</small></h3>
+  <p class="sub">제미나이에게 무엇을 만들지 같이 고민해 달라고 해요.</p>
   <div class="g2">
     <div class="fld"><label>관심 있는 과학 단원이나 주제</label><input type="text" id="i1" data-k="i_topic" placeholder="예: 원소와 주기율표, 소화 기관, 전기 회로"></div>
-    <div class="fld"><label>좋아하는 게임·앱 종류 (모르면 비워도 돼요)</label><input type="text" id="i2" data-k="i_like" placeholder="예: 퀴즈, 짝 맞추기, 키우기, 시뮬레이션"></div>
+    <div class="fld"><label>좋아하는 게임·앱 종류<span class="h">모르면 비워도 돼요</span></label><input type="text" id="i2" data-k="i_like" placeholder="예: 퀴즈, 짝 맞추기, 키우기, 시뮬레이션"></div>
   </div>
   <div class="row">
     <button class="btn p" onclick="composeIdea()">상담 프롬프트 만들기</button>
     <button class="btn" onclick="copyText('ideap')">복사</button>
     <a class="btn" href="https://gemini.google.com" target="_blank" rel="noopener">제미나이 열기</a>
   </div>
-  <div class="fld"><label>상담 프롬프트 (복사해서 제미나이에 붙여넣으세요)</label><textarea id="ideap" data-k="idea_prompt" rows="7"></textarea></div>
-  <div class="notice">이 단계에서는 <b>코드를 만들지 않고</b> 아이디어만 상의해요. 제미나이가 묻는 질문에 답하면서 아이디어를 좁혀 보세요. 어떤 아이디어로 할지는 <b>내가</b> 정해요.</div>
-  <div class="fld"><label>제미나이와 상의한 결과: 고른 아이디어와 고른 이유</label><textarea data-k="idea_pick" data-l="아이디어 상담 결과 (고른 아이디어와 이유)"></textarea></div>
+  <div class="fld"><label>상담 프롬프트<span class="h">[복사]해서 제미나이에 붙여넣기</span></label><textarea id="ideap" data-k="idea_prompt" rows="7"></textarea></div>
+  <div class="notice">아직 <b>코드는 만들지 않아요.</b> 제미나이의 질문에 답하며 아이디어를 좁히고, 고르는 건 <b>내가</b> 해요.</div>
+  <div class="fld"><label>고른 아이디어와 이유</label><textarea data-k="idea_pick" data-l="아이디어 상담 결과 (고른 아이디어와 이유)"></textarea></div>
 
-  <h3>작품 기획서</h3>
-  <p class="sub">여기 쓴 내용이 2차시에 제미나이에게 보낼 프롬프트로 자동으로 들어가요. 구체적으로 쓸수록 원하는 작품이 나와요.</p>
-  <div class="notice warn">완성된 작품은 <b>공개 갤러리</b>에 올라갈 수 있어요. 실명, 연락처, 사진 같은 개인정보는 넣지 마세요.</div>
+  <h3 id="s1-2">기획서 쓰기</h3>
+  <p class="sub">여기 쓴 내용이 2차시 프롬프트에 그대로 들어가요. 자세히 쓸수록 원하는 작품이 나와요.</p>
+  <div class="notice warn">작품은 <b>공개 갤러리</b>에 올라가요. 이름·연락처·사진은 넣지 마세요.</div>
   <div class="g2">
     <div class="fld"><label>작품 이름</label><input type="text" data-k="title" data-l="작품 이름" placeholder="예: 원소 짝꿍 찾기"></div>
     <div class="fld"><label>종류</label><select data-k="kind" data-l="종류"><option value="">선택</option><option>과학 개념 게임</option><option>학급 도우미 앱</option><option>시뮬레이터</option><option>기타</option></select></div>
-    <div class="fld"><label>관련 과학 개념 (학급 앱이면 '해당 없음')</label><input type="text" data-k="concept" data-l="관련 과학 개념" placeholder="예: 원소 기호"></div>
-    <div class="fld"><label>사용자 (누가, 언제 쓰나요?)</label><input type="text" data-k="user" data-l="사용자" placeholder="예: 시험 공부하는 우리 반 친구들"></div>
+    <div class="fld"><label>관련 과학 개념<span class="h">학급 앱이면 '해당 없음'</span></label><input type="text" data-k="concept" data-l="관련 과학 개념" placeholder="예: 원소 기호"></div>
+    <div class="fld"><label>누가 쓰나요?</label><input type="text" data-k="user" data-l="사용자" placeholder="예: 시험 공부하는 우리 반 친구들"></div>
   </div>
   <div class="g3">
     <div class="fld"><label>핵심 기능 1</label><textarea data-k="feat1" placeholder="예: 카드를 뒤집어 원소 이름과 기호 짝 맞추기" data-l="핵심 기능 1"></textarea></div>
     <div class="fld"><label>핵심 기능 2</label><textarea data-k="feat2" placeholder="예: 맞히면 점수 +10, 틀리면 카드가 다시 뒤집힘" data-l="핵심 기능 2"></textarea></div>
     <div class="fld"><label>핵심 기능 3</label><textarea data-k="feat3" placeholder="예: 60초 타이머, 끝나면 최종 점수 보여 주기" data-l="핵심 기능 3"></textarea></div>
   </div>
-  <div class="fld"><label>화면 구성과 디자인 (글로 설명하세요: 무엇이 어디에 있고, 어떤 색과 분위기인지)</label><textarea data-k="sketch" data-l="화면 구성과 디자인" rows="4" placeholder="예: 위쪽에 점수와 남은 시간, 가운데에 원소 카드 12장, 아래에 다시 시작 버튼. 파란색 계열, 큰 글씨."></textarea></div>
-  <div class="fld"><label>이 앱 때문에 불편하거나 기분 나쁠 사람이 있을까요? 있다면 어떻게 바꿀까요?</label><textarea data-k="harm" data-l="불편할 사람 점검"></textarea></div>
-  <div class="fld"><label>예상되는 어려움 / 선생님께 묻고 싶은 것</label><textarea data-k="worry" data-l="어려움"></textarea></div>
+  <div class="fld"><label>화면 구성과 디자인<span class="h">무엇이 어디에, 어떤 색과 분위기로</span></label><textarea data-k="sketch" data-l="화면 구성과 디자인" rows="4" placeholder="예: 위쪽에 점수와 남은 시간, 가운데에 원소 카드 12장, 아래에 다시 시작 버튼. 파란색 계열, 큰 글씨."></textarea></div>
+  <div class="fld"><label>이 작품 때문에 불편할 사람이 있을까요?<span class="h">있다면 어떻게 바꿀지</span></label><textarea data-k="harm" data-l="불편할 사람 점검"></textarea></div>
+  <div class="fld"><label>어려울 것 같은 점, 선생님께 묻고 싶은 것</label><textarea data-k="worry" data-l="어려움"></textarea></div>
   <div class="row dock">
     <button class="btn p" id="nb_t1" onclick="submitNote('t1','1차시 기획')">제출하기</button>
     <p class="st" id="ns_t1" aria-live="polite"></p>
@@ -218,7 +232,8 @@ td .btn{min-height:32px;padding:4px 10px}
 <section class="tab" id="t2">
   <h2>2~3차시 · 만들고 고치기</h2>
   <div class="notice warn signbanner">먼저 <b>로그인하고 1차시에서 서약서에 서명</b>해야 제출과 게임 내보내기를 쓸 수 있어요.</div>
-  <p class="sub">작품은 제미나이 Canvas에서 만들고, 여기에는 기록을 남기고 완성한 게임을 제출해요.</p>
+  <p class="sub">작품은 제미나이 Canvas에서 만들고, 여기에는 기록을 남겨요.</p>
+  <div class="todo" role="navigation" aria-label="이번 시간에 할 일"><b>이번 시간에 할 일</b><ol><li data-todo=""><a href="#s2-1"><i>1</i>프롬프트 만들기</a></li><li data-todo=""><a href="#s2-2"><i>2</i>제작 일지</a></li><li data-todo=""><a href="#s2-3"><i>3</i>친구 작품 피드백</a></li><li data-todo=""><a href="#s2-4"><i>4</i>작품 점검</a></li><li data-todo="game"><a href="#s2-5"><i>5</i>게임 제출</a></li><li data-todo="t2"><a href="#nb_t2"><i>✓</i>기록 제출</a></li></ol></div>
 
   <details open><summary>안전 문구: 제미나이 새 대화를 시작할 때 맨 앞에 붙여넣기</summary>
     <textarea id="safe" readonly rows="4"></textarea>
@@ -234,45 +249,45 @@ td .btn{min-height:32px;padding:4px 10px}
     </ul>
   </details>
 
-  <h3>프롬프트 완성하기 <small>2차시 시작</small></h3>
-  <p class="sub">좋은 프롬프트 = <b>역할 + 목적 + 대상 + 기능 + 디자인</b>. 목적·대상·기능·디자인은 1차시 기획서에서 자동으로 가져와요. 역할과 추가 요구사항만 채우면 돼요.</p>
+  <h3 id="s2-1">프롬프트 만들기 <small>2차시</small></h3>
+  <p class="sub">좋은 프롬프트는 <b>역할 + 목적 + 대상 + 기능 + 디자인</b>이에요. 목적·대상·기능·디자인은 1차시 기획서에서 자동으로 가져와요. 역할과 추가 요구사항만 채우면 돼요.</p>
   <div class="g2">
     <div class="bad"><b>나쁜 예</b><br>"과학 게임 만들어줘"<br><small>→ 무슨 과학? 누가? 어떻게? 알 수 없어요.</small></div>
     <div class="good"><b>좋은 예</b><br>"너는 웹 개발자야. 중학생이 원소 기호를 외우도록 돕는 카드 짝 맞추기 게임을 HTML 한 파일로 만들어줘. 점수와 타이머가 있고, 밝고 귀여운 디자인으로."</div>
   </div>
   <div class="plan" id="planview" aria-live="polite"></div>
   <div class="g2">
-    <div class="fld"><label>① 역할 (너는 ~야)</label><input type="text" id="f1" data-k="f_role" data-l="역할" placeholder="예: 웹 개발자, 과학 선생님 겸 게임 개발자"></div>
-    <div class="fld"><label>⑥ 추가 요구사항 (기획서에 없는 것, 없으면 비워도 돼요)</label><textarea id="f6" data-k="f_extra" data-l="추가 요구사항" rows="2" placeholder="예: 쉬움/어려움 난이도 선택, 정답이면 초록색으로 반짝"></textarea></div>
+    <div class="fld"><label>① 역할<span class="h">"너는 ~야"</span></label><input type="text" id="f1" data-k="f_role" data-l="역할" placeholder="예: 웹 개발자, 과학 선생님 겸 게임 개발자"></div>
+    <div class="fld"><label>⑥ 더 원하는 것<span class="h">없으면 비워도 돼요</span></label><textarea id="f6" data-k="f_extra" data-l="추가 요구사항" rows="2" placeholder="예: 쉬움/어려움 난이도 선택, 정답이면 초록색으로 반짝"></textarea></div>
   </div>
   <div class="row">
     <button class="btn p" onclick="compose()">프롬프트로 합치기</button>
     <button class="btn" id="copyp1" onclick="copyP1()">복사</button>
     <a class="btn" href="https://gemini.google.com" target="_blank" rel="noopener">제미나이 열기</a>
   </div>
-  <div class="fld"><label>완성된 프롬프트 (고쳐도 되지만 맨 끝 [개발 지침]과 [안전 규칙]은 지우지 마세요)</label><textarea id="prompt1" data-k="prompt1" data-l="완성된 프롬프트" rows="9"></textarea></div>
-  <div class="fld"><label>제미나이 결과를 보고: 마음에 든 점 / 고치고 싶은 점</label><textarea data-k="prompt_reflect" data-l="결과 평가"></textarea></div>
+  <div class="fld"><label>완성된 프롬프트<span class="h">고쳐도 되지만 맨 끝 [개발 지침]과 [안전 규칙]은 남겨요</span></label><textarea id="prompt1" data-k="prompt1" data-l="완성된 프롬프트" rows="9"></textarea></div>
+  <div class="fld"><label>결과를 보고: 마음에 든 점, 고치고 싶은 점</label><textarea data-k="prompt_reflect" data-l="결과 평가"></textarea></div>
 
-  <h3>제작 일지 <small>2차시</small></h3>
-  <p class="sub">내가 입력한 프롬프트와 결과, 다음에 고칠 점을 기록하세요.</p>
+  <h3 id="s2-2">제작 일지 쓰기 <small>2차시</small></h3>
+  <p class="sub">제미나이에 보낸 말, 결과, 다음에 고칠 점을 한 줄씩 적어요.</p>
   <div class="tbl" id="tb_log"></div>
   <div class="row"><button class="btn" onclick="addRow('log')">＋ 줄 추가</button></div>
 
-  <h3>피드백 카드 <small>3차시, 친구 작품을 해 본 뒤</small></h3>
+  <h3 id="s2-3">친구 작품에 피드백 <small>3차시</small></h3>
   <div class="tbl" id="tb_fb"></div>
   <div class="row"><button class="btn" onclick="addRow('fb')">＋ 카드 추가</button></div>
 
-  <h3>우리 작품 점검</h3>
-  <div class="fld"><label>과학 개념 설명이 정확한가요? (틀린 부분 → 고친 방법)</label><textarea data-k="sci_check" data-l="과학 개념 점검"></textarea></div>
+  <h3 id="s2-4">내 작품 점검하기</h3>
+  <div class="fld"><label>과학 개념이 정확한가요?<span class="h">틀린 부분과 고친 방법</span></label><textarea data-k="sci_check" data-l="과학 개념 점검"></textarea></div>
   <div class="fld"><label>받은 피드백 중 반영한 것</label><textarea data-k="applied" data-l="반영한 피드백"></textarea></div>
 
-  <h3>게임 제출</h3>
-  <p class="sub">Canvas에서 <b>전체 코드</b>를 복사해 아래에 붙여넣으세요. 크기와 문제 가능성을 점검한 뒤 제출용 .html 파일을 만들어요.</p>
+  <h3 id="s2-5">게임 제출하기</h3>
+  <p class="sub">Canvas의 <b>전체 코드</b>를 복사해 아래 큰 칸에 붙여넣으면, 앱이 먼저 점검해 줘요.</p>
   <div class="g2">
-    <div class="fld"><label>갤러리에 보일 게임 이름 (20자 이내)</label><input type="text" id="gtitle" data-k="g_title" data-l="갤러리 게임 이름" maxlength="20" placeholder="예: 원소 짝꿍 찾기"></div>
-    <div class="fld"><label>게임 설명 한 줄 (40자 이내)</label><input type="text" id="gdesc" data-k="g_desc" data-l="갤러리 게임 설명" maxlength="40" placeholder="예: 카드를 뒤집어 원소 이름과 기호를 짝지어요"></div>
+    <div class="fld"><label>게임 이름<span class="h">20자까지</span></label><input type="text" id="gtitle" data-k="g_title" data-l="갤러리 게임 이름" maxlength="20" placeholder="예: 원소 짝꿍 찾기"></div>
+    <div class="fld"><label>한 줄 설명<span class="h">40자까지</span></label><input type="text" id="gdesc" data-k="g_desc" data-l="갤러리 게임 설명" maxlength="40" placeholder="예: 카드를 뒤집어 원소 이름과 기호를 짝지어요"></div>
   </div>
-  <p class="sub">갤러리에는 게임의 <b>첫 화면</b>이 그림으로 나오고, 그 아래에 이름과 설명이 작게 나와요. 이름·설명에 내 이름이나 학번은 쓰지 마세요.</p>
+  <p class="sub">갤러리에는 게임 첫 화면 그림 아래에 이름과 설명이 나와요. 내 이름·학번은 쓰지 마세요.</p>
   <textarea id="gcode" spellcheck="false" placeholder="여기에 코드를 붙여넣으세요 (<!DOCTYPE html> ... </html>)"></textarea>
   <div class="bar" style="margin-top:8px"><i id="barfill"></i><b></b></div>
   <div id="barlbl"></div>
@@ -296,29 +311,30 @@ td .btn{min-height:32px;padding:4px 10px}
   <h2>4차시 · 발표와 투표</h2>
   <div class="notice warn signbanner">먼저 <b>로그인하고 1차시에서 서약서에 서명</b>해야 제출과 투표를 할 수 있어요.</div>
   <p class="sub">우리 반 작품을 해 보고, 투표하고, 소감을 남겨요.</p>
+  <div class="todo" role="navigation" aria-label="이번 시간에 할 일"><b>이번 시간에 할 일</b><ol><li data-todo=""><a href="#galbox"><i>·</i>작품 해 보기</a></li><li data-todo="vote"><a href="#s3-1"><i>1</i>투표하기</a></li><li data-todo=""><a href="#s3-2"><i>2</i>소감 쓰기</a></li><li data-todo="t3"><a href="#nb_t3"><i>✓</i>소감 제출</a></li></ol></div>
   <div class="row">
     <a class="btn" id="galbig" target="_blank" rel="noopener" hidden>우리 반 갤러리 큰 화면으로 열기</a>
   </div>
-  <p class="sub">투표는 <b>우리 반<span id="votecls"></span></b> 작품에서만 해요. 아래 갤러리에서 작품을 플레이하고, 번호를 기억해 두세요.</p>
+  <p class="sub"><b>우리 반<span id="votecls"></span></b> 작품을 해 보고, 마음에 든 작품의 <b>번호</b>를 기억해 두세요.</p>
   <div class="galbox" id="galbox" hidden><iframe id="galframe" title="우리 반 갤러리" loading="lazy"></iframe></div>
 
-  <h3>투표</h3>
-  <p class="sub">부문마다 <b>작품 번호</b> 하나를 적으세요(1~99). <b>내 작품은 고르지 마세요.</b> 다시 제출하면 마지막 투표가 쓰여요.</p>
+  <h3 id="s3-1">투표하기</h3>
+  <p class="sub">칸마다 작품 <b>번호</b> 하나를 적어요. <b>내 작품은 고르지 않아요.</b> 다시 내면 마지막 투표가 쓰여요.</p>
   <div class="g2">
-    <div class="fld"><label for="v_sci">과학적으로 가장 정확한 작품 (번호)</label><input type="number" id="v_sci" min="1" max="99" inputmode="numeric"></div>
-    <div class="fld"><label for="v_fun">가장 재미있는 작품 (번호)</label><input type="number" id="v_fun" min="1" max="99" inputmode="numeric"></div>
-    <div class="fld"><label for="v_creative">가장 창의적인 작품 (번호)</label><input type="number" id="v_creative" min="1" max="99" inputmode="numeric"></div>
-    <div class="fld"><label for="v_practical">가장 실용적인 작품 (번호)</label><input type="number" id="v_practical" min="1" max="99" inputmode="numeric"></div>
+    <div class="fld"><label for="v_sci">과학적으로 가장 정확한 작품</label><input type="number" id="v_sci" min="1" max="99" inputmode="numeric" placeholder="번호"></div>
+    <div class="fld"><label for="v_fun">가장 재미있는 작품</label><input type="number" id="v_fun" min="1" max="99" inputmode="numeric" placeholder="번호"></div>
+    <div class="fld"><label for="v_creative">가장 창의적인 작품</label><input type="number" id="v_creative" min="1" max="99" inputmode="numeric" placeholder="번호"></div>
+    <div class="fld"><label for="v_practical">가장 실용적인 작품</label><input type="number" id="v_practical" min="1" max="99" inputmode="numeric" placeholder="번호"></div>
   </div>
   <div class="row dock in">
     <button class="btn p" id="vbtn" onclick="submitVote()">투표 제출</button>
     <p class="st" id="vstate" aria-live="polite"></p>
   </div>
 
-  <h3>소감과 성찰</h3>
+  <h3 id="s3-2">소감 쓰기</h3>
   <div class="fld"><label>가장 인상 깊은 작품과 이유</label><input type="text" data-k="r_best" data-l="인상 깊은 작품"></div>
   <div class="fld"><label>내가 만들며 배운 과학 개념</label><textarea data-k="r_sci" data-l="배운 과학 개념"></textarea></div>
-  <div class="fld"><label>AI에게 좋은 질문(프롬프트)을 하려면 어떻게 해야 할까?</label><textarea data-k="r_ai" data-l="AI 활용법"></textarea></div>
+  <div class="fld"><label>AI에게 잘 물어보려면 어떻게 해야 할까?</label><textarea data-k="r_ai" data-l="AI 활용법"></textarea></div>
   <div class="fld"><label>AI가 틀렸거나 아쉬웠던 점, 앞으로 만들고 싶은 것</label><textarea data-k="r_more" data-l="아쉬운 점/다음 계획"></textarea></div>
   <div class="row dock">
     <button class="btn p" id="nb_t3" onclick="submitNote('t3','4차시 성찰')">소감 제출하기</button>
@@ -427,7 +443,7 @@ function openAuth(m,msg){setAuthMode(m||'login');$('aerr').textContent=msg||'';$
   $('aov').classList.add('on');document.body.style.overflow='hidden';setTimeout(()=>{($('aid').value?$('apw'):$('aid')).focus()},50)}
 function closeAuth(){$('aov').classList.remove('on');document.body.style.overflow=''}
 // 이 브라우저에 다른 학생의 기록이 남아 있을 때 비운다
-function resetLocal(){S={f:{},rows:{log:[{},{},{}],fb:[{},{}]}};document.querySelectorAll('[data-k]').forEach(el=>{el.value=''});$('gcode').value='';renderRows();save()}
+function resetLocal(){for(const k in DONE)delete DONE[k];S={f:{},rows:{log:[{},{},{}],fb:[{},{}]}};document.querySelectorAll('[data-k]').forEach(el=>{el.value=''});$('gcode').value='';renderRows();save()}
 async function doAuth(){
   const id=$('aid').value.trim(),pw=$('apw').value,err=m=>{$('aerr').textContent=m};
   if(!parseId(id))return err('학번은 숫자 5자리예요 (예: 20315)');
@@ -465,6 +481,7 @@ function refresh(){
   $('pchip').className='chip '+(ok?'ok':'no');$('pchip').textContent=ok?'서약 완료':'서약 전';
   $('signbox').style.display=ok?'none':'';
   $('signstate').textContent='';
+  markTodo();
   gcheck();
 }
 function bind(){
@@ -560,7 +577,11 @@ async function submitNote(sec,name){
   const b=$('nb_'+sec),st=$('ns_'+sec);b.disabled=true;st.textContent='제출하는 중…';
   const r=await sapi('note',{section:sec,text});b.disabled=false;
   if(!r.ok){st.textContent='❌ '+r.message;toast(r.message,3500);return}
-  st.textContent='✅ 제출했어요 ('+fmtT(r.data.savedAt)+'). 고쳐서 다시 제출하면 마지막 것이 쓰여요.';toast('제출했어요!',2000)}
+  st.textContent='✅ 제출했어요 ('+fmtT(r.data.savedAt)+'). 고쳐서 다시 제출하면 마지막 것이 쓰여요.';DONE[sec]=true;markTodo();toast('제출했어요!',2000)}
+/* 이번 시간에 할 일: 끝낸 일에 체크 */
+const DONE={};
+function markTodo(){document.querySelectorAll('.todo li[data-todo]').forEach(li=>{const k=li.dataset.todo;if(!k)return;const d=k==='sign'?signed():!!DONE[k];li.classList.toggle('done',d);li.classList.toggle('go',k==='sign'&&!d)})}
+document.querySelectorAll('.todo a').forEach(a=>a.addEventListener('click',e=>{const t=document.getElementById(a.getAttribute('href').slice(1));if(!t)return;e.preventDefault();t.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'});if(t.focus&&t.tagName==='BUTTON')setTimeout(()=>t.focus({preventScroll:true}),300)}));
 /* 투표 */
 const VK=['sci','fun','creative','practical'];
 async function galleryNums(){
@@ -576,15 +597,15 @@ async function submitVote(){
   $('vbtn').disabled=true;$('vstate').textContent='제출하는 중…';
   const r=await sapi('vote',{votes});$('vbtn').disabled=false;
   if(!r.ok){$('vstate').textContent='❌ '+r.message;toast(r.message,3500);return}
-  $('vstate').textContent='✅ 투표했어요 ('+fmtT(r.data.savedAt)+'). 바꾸고 싶으면 다시 제출하세요.';toast('투표했어요!',2000)}
+  $('vstate').textContent='✅ 투표했어요 ('+fmtT(r.data.savedAt)+'). 바꾸고 싶으면 다시 제출하세요.';DONE.vote=true;markTodo();toast('투표했어요!',2000)}
 // 로그인 뒤 내 제출 현황을 불러와 화면에 표시
 async function loadStatus(){
   const r=await sapi('status');if(!r.ok)return;
-  for(const sec of ['t1','t2','t3']){const at=r.data.notes&&r.data.notes[sec];$('ns_'+sec).textContent=at?'✅ 제출함 ('+fmtT(at)+')':'아직 제출하지 않았어요.'}
+  for(const sec of ['t1','t2','t3']){const at=r.data.notes&&r.data.notes[sec];DONE[sec]=!!at;$('ns_'+sec).textContent=at?'✅ 제출함 ('+fmtT(at)+')':'아직 제출하지 않았어요.'}
   const v=r.data.vote;
   if(v&&v.votes)for(const k of VK){if(v.votes[k]!=null)$('v_'+k).value=v.votes[k]}
   $('vstate').textContent=!r.data.voteOpen?'투표가 닫혀 있어요.':v?'✅ 투표함 ('+fmtT(v.at)+'). 바꾸려면 다시 제출하세요.':'아직 투표하지 않았어요.';
-  $('vbtn').disabled=!r.data.voteOpen}
+  DONE.vote=!!v;$('vbtn').disabled=!r.data.voteOpen;markTodo()}
 function copySum(sec,name){if(!ready())return;copyRaw(buildSum(sec,name),'복사됨!')}
 
 /* 서명 팝업 */
@@ -668,7 +689,7 @@ async function submitGame(){
   const st=$('gstate');$('gsub').disabled=true;st.textContent='제출하는 중… (몇 초 걸릴 수 있어요. 창을 닫지 마세요)';
   const r=await sapi('submit',{html:t,requestId:rid()});$('gsub').disabled=false;gcheck();
   if(!r.ok){st.textContent='❌ '+r.message;toast(r.message,4000);return}
-  st.textContent='✅ 제출했어요! '+r.data.version+'번째 제출 ('+fmtT(r.data.submittedAt)+', '+fmt(r.data.size)+'). 고쳐서 다시 제출하면 마지막 제출이 쓰여요.';
+  DONE.game=true;markTodo();st.textContent='✅ 제출했어요! '+r.data.version+'번째 제출 ('+fmtT(r.data.submittedAt)+', '+fmt(r.data.size)+'). 고쳐서 다시 제출하면 마지막 제출이 쓰여요.';
   toast('제출했어요!',2500)}
 ['gcode','gtitle','gdesc'].forEach(i=>$(i).addEventListener('input',gcheck));
 
