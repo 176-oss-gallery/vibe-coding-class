@@ -693,6 +693,25 @@ test('submit: 잘못된 requestId → BAD_REQUEST', () => {
   assert.strictEqual(st.files.size, 2);
 });
 
+test('submit: Submissions 는 잠금 안에서만 읽음 (잠금 밖에서 먼저 읽으면 버전이 겹침)', () => {
+  const { deps, st } = makeDeps();
+  call(deps, { action: 'bind', idToken: A, studentId: '10101', name: '김하늘' });
+  const orig = deps.readSubmissions;
+  let outside = 0;
+  deps.readSubmissions = () => { if (!st.inLock) outside++; return orig(); };
+  for (let i = 0; i < 3; i++) {
+    const r = call(deps, { action: 'submit', idToken: A, html: PAGE, requestId: 'q' + i });
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.version, i + 1);
+  }
+  // 재전송도 잠금 안에서 확인하고, 만든 파일은 버림
+  const d = call(deps, { action: 'submit', idToken: A, html: PAGE, requestId: 'q0' });
+  assert.strictEqual(d.duplicate, true);
+  assert.strictEqual(d.version, 1);
+  assert.strictEqual(st.files.size, 3);
+  assert.strictEqual(outside, 0, '잠금 밖에서 Submissions 를 읽으면 안 됨');
+});
+
 test('submit: 제출 빈도 제한 → BUSY (다른 안내 문구)', () => {
   const { deps, st } = makeDeps();
   call(deps, { action: 'bind', idToken: A, studentId: '10101', name: '김하늘' });

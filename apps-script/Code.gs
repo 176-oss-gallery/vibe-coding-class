@@ -689,11 +689,9 @@ function doSubmit_(deps, cfg, req, who) {
     return ok_({ studentId: String(s.id).trim(), version: Number(s.version), size: Number(s.size),
       sha256: String(s.sha256 || '').slice(0, 12), submittedAt: toIso_(s.at), duplicate: true });
   };
-  // 재전송이면 파일을 만들기 전에 바로 돌려줌 (잠금 없이 먼저 한 번 확인)
-  if (requestId) {
-    var pre = deps.readSubmissions().filter(sameReq);
-    if (pre.length) return dupOut(pre[0]);
-  }
+  // 주의: Submissions 는 잠금을 잡기 전에 읽지 않는다. 앱스크립트는 한 실행 안에서 같은 범위를 다시 읽으면
+  // 처음 읽은 값을 돌려줄 수 있어서, 잠금 밖에서 먼저 읽으면 잠금 안의 버전 계산이 옛 값으로 된다(버전 중복).
+  // 재전송 확인은 잠금 안에서만 한다(재전송은 드물고, 그때 만든 파일은 버린다).
 
   // 무거운 일(내용 만들기, 해시, 드라이브 저장)은 잠금 밖에서. 잠금 안에서는 버전 번호와 기록만.
   var content = buildMarker(sid, markName) + bodyHtml;
@@ -979,7 +977,10 @@ function makeRealDeps() {
     sha256Hex: sha256HexReal_,
     tryLock: function () {
       lock = LockService.getScriptLock();
-      return lock.tryLock(20000);
+      if (!lock.tryLock(20000)) return false;
+      // 잠금을 잡은 뒤 시트를 새로 읽도록 함 (다른 실행이 방금 쓴 행이 보이게)
+      try { SpreadsheetApp.flush(); } catch (e) { /* 무시 */ }
+      return true;
     },
     releaseLock: function () {
       if (!lock) return;
