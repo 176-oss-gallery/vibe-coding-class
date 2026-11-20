@@ -68,7 +68,7 @@ var RATE_MAX = 5;      // 이메일당 RATE_WINDOW 초 안에 최대 제출 수
 var RATE_WINDOW = 60;
 var NAME_MAX = 20;
 var TOKEN_MAX = 4096;
-var ID_RE = /^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-3]\d|40)$/; // tools/common.py 와 동일
+var ID_RE = /^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-9]\d)$/; // tools/common.py 와 동일
 var ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
 
 var SHEETS = {
@@ -847,7 +847,6 @@ function doGet(e) {
 // 학생·다른 계정·로그인 안 한 사람은 이메일이 같지 않거나 빈칸이므로 거부된다.
 var ADMIN_LIST_MAX = 300;
 var ADMIN_ZIP_MAX_B64 = 30 * 1024 * 1024; // 한 번에 내려받는 zip 상한(문자 수). 반 하나는 훨씬 작음
-var ADMIN_FAIL_MAX = 5, ADMIN_FAIL_SEC = 300;
 
 function classLabel_(key) {
   return Number(key.charAt(0)) + '학년 ' + Number(key.slice(1)) + '반';
@@ -950,14 +949,13 @@ function adminLatest(submissions, classKey) {
   });
 }
 
-// 순수(deps 주입): 관리자 비밀번호 확인 (같은 학교 계정이 아닌 선생님용). → 'OK' | 'WRONG' | 'LOCKED' | 'NONE'
-// deps: getAdminPassword(), getFails(), putFails(n), clearFails(). 5번 틀리면 5분 잠김.
+// 순수(deps 주입): 관리자 비밀번호 확인 (같은 학교 계정이 아닌 선생님용). → 'OK' | 'WRONG' | 'NONE'
+// 여러 선생님이 함께 쓰므로 틀려도 잠그지 않는다(주소 열쇠 ADMIN_KEY 를 알아야 비밀번호 칸이 나옴).
+// deps: getAdminPassword()
 function adminPasswordCheck(deps, pw) {
   var real = String(deps.getAdminPassword() || '');
   if (!real) return 'NONE';
-  if (deps.getFails() >= ADMIN_FAIL_MAX) return 'LOCKED';
-  if (typeof pw === 'string' && pw.length <= 200 && safeEqual(pw, real)) { deps.clearFails(); return 'OK'; }
-  deps.putFails(deps.getFails() + 1);
+  if (typeof pw === 'string' && pw.length <= 200 && safeEqual(pw, real)) return 'OK';
   return 'WRONG';
 }
 
@@ -1065,15 +1063,10 @@ function adminPwSet_() {
 // 관리자 확인: 같은 학교 선생님 계정이면 바로 통과, 아니면 관리자 비밀번호(스크립트 속성 ADMIN_PASSWORD)
 function adminCheck_(pw) {
   if (isAdmin_()) return;
-  var cache = CacheService.getScriptCache();
   var r = adminPasswordCheck({
-    getAdminPassword: function () { return PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD'); },
-    getFails: function () { return Number(cache.get('af:admin')) || 0; },
-    putFails: function (n) { cache.put('af:admin', String(n), ADMIN_FAIL_SEC); },
-    clearFails: function () { cache.remove('af:admin'); }
+    getAdminPassword: function () { return PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD'); }
   }, pw);
   if (r === 'OK') return;
-  if (r === 'LOCKED') throw new Error('비밀번호를 여러 번 틀려서 5분 동안 잠겼어요.');
   if (r === 'WRONG') throw new Error('관리자 비밀번호가 맞지 않아요.');
   throw new Error('관리자만 쓸 수 있어요.');
 }
