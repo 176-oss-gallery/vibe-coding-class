@@ -21,7 +21,7 @@ main{padding:12px 16px 48px;max-width:760px;margin:0 auto}
 .btn{border:1px solid var(--bd);background:var(--card);color:var(--tx);padding:7px 14px;border-radius:7px;cursor:pointer;font:inherit;font-size:14px;display:inline-block;text-decoration:none;min-height:38px}
 .btn:hover{background:var(--pri2)}.btn.p{background:var(--pri);color:#fff;border-color:var(--pri)}.btn.p:hover{opacity:.9}
 .btn[disabled],.btn.off{opacity:.45;pointer-events:none}
-input[type=text],input[type=number],textarea,select{width:100%;padding:8px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit;font-size:14px;min-height:38px}
+input[type=text],input[type=password],input[type=number],textarea,select{width:100%;padding:8px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit;font-size:14px;min-height:38px}
 input[readonly]{opacity:.7}
 textarea{resize:vertical;min-height:60px}
 :focus-visible{outline:2px solid var(--pri);outline-offset:2px}
@@ -54,6 +54,12 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;font-size:14px;margin:6px 0}
 .kv dt{color:var(--mut)}.kv dd{margin:0;overflow-wrap:anywhere;min-width:0}
 #gbtn{min-height:44px}
+.seg{display:flex;border:1px solid var(--pri);border-radius:8px;overflow:hidden;margin:10px 0 12px}
+.seg button{flex:1;min-height:40px;border:0;background:var(--card);color:var(--tx);font:inherit;font-size:14px;cursor:pointer;padding:6px 8px}
+.seg button+button{border-left:1px solid var(--pri)}
+.seg button[aria-selected=true]{background:var(--pri);color:#fff;font-weight:700}
+.signed{font-size:16px;font-weight:700;margin:4px 0}
+form{margin:0}
 #html{min-height:160px;font-family:Consolas,"D2Coding",monospace;font-size:12px;white-space:pre;overflow-wrap:normal}
 #size{font-size:13px;font-variant-numeric:tabular-nums;color:var(--mut)}#size.bad{color:var(--bad)}
 .mono{font-family:Consolas,"D2Coding",monospace;font-size:12px}
@@ -75,7 +81,7 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
 </header>
 <main>
   <div class="notice warn" id="cfgWarn" hidden>
-    설정이 비어 있습니다. 이 파일 맨 위 CONFIG의 GOOGLE_CLIENT_ID와 WEB_APP_URL을 실제 값으로 바꾸세요. 바꾸기 전에는 서버 버튼이 꺼져 있습니다.
+    설정이 비어 있습니다. 이 파일 맨 위 CONFIG의 WEB_APP_URL(구글 방식이면 GOOGLE_CLIENT_ID도)을 실제 값으로 바꾸세요. 바꾸기 전에는 서버 버튼이 꺼져 있습니다.
   </div>
   <p class="sub">학교 크롬북에서 로그인부터 제출까지 되는지 확인하는 시험 페이지입니다. 위에서부터 차례로 누르고, 끝나면 6번의 진단 결과를 복사해 선생님께 보내세요.</p>
 
@@ -87,18 +93,62 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
   </section>
 
   <section class="card" id="c2" data-st="wait">
-    <div class="hd"><h2><span class="n">2</span>구글 로그인</h2><span class="st" id="st2">대기</span></div>
-    <p class="sub">학교 구글 계정으로 로그인하세요. 로그인 정보는 이 창을 닫으면 사라집니다.</p>
-    <div id="gbtn"></div>
-    <dl class="kv" id="who" hidden>
-      <dt>계정</dt><dd id="wEmail"></dd>
-      <dt>이름</dt><dd id="wName"></dd>
-    </dl>
-    <div class="row" id="outRow" hidden><button class="btn" id="bOut" type="button">로그아웃</button></div>
+    <div class="hd"><h2><span class="n">2</span><span data-mode="google">구글 로그인</span><span data-mode="password">내 학번으로 들어가기</span></h2><span class="st" id="st2">대기</span></div>
+    <div data-mode="google">
+      <p class="sub">학교 구글 계정으로 로그인하세요. 로그인 정보는 이 창을 닫으면 사라집니다.</p>
+      <div id="gbtn"></div>
+      <dl class="kv" id="who" hidden>
+        <dt>계정</dt><dd id="wEmail"></dd>
+        <dt>이름</dt><dd id="wName"></dd>
+      </dl>
+      <div class="row" id="outRow" hidden><button class="btn" id="bOut" type="button">로그아웃</button></div>
+    </div>
+    <div data-mode="password">
+      <p class="notice warn">구글 비밀번호를 쓰지 말고 새로 정한 비밀번호를 쓰세요. 비밀번호를 잊어버리면 선생님께 말하세요. 선생님이 초기화하면 10분 안에 학번으로 로그인해서 새 비밀번호를 정해야 해요.</p>
+      <div id="pwForms">
+        <div class="seg" role="tablist" aria-label="등록 또는 로그인">
+          <button type="button" role="tab" id="tReg" aria-controls="fReg" aria-selected="true">처음이에요: 등록</button>
+          <button type="button" role="tab" id="tLog" aria-controls="fLog" aria-selected="false">등록했어요: 로그인</button>
+        </div>
+        <form id="fReg" role="tabpanel" aria-labelledby="tReg" novalidate>
+          <div class="g2">
+            <div class="fld"><label for="rSid">학번 5자리 (예: 20315)</label><input type="text" id="rSid" inputmode="numeric" maxlength="5" autocomplete="username"></div>
+            <div class="fld"><label for="rName">이름 (명단과 똑같이)</label><input type="text" id="rName" maxlength="20" autocomplete="off"></div>
+            <div class="fld"><label for="rPw">새 비밀번호 (4~20자)</label><input type="password" id="rPw" maxlength="20" autocomplete="new-password"></div>
+            <div class="fld"><label for="rPw2">비밀번호 확인</label><input type="password" id="rPw2" maxlength="20" autocomplete="new-password"></div>
+          </div>
+          <div class="row"><button class="btn p net" id="bReg" type="submit">등록하고 들어가기</button></div>
+        </form>
+        <form id="fLog" role="tabpanel" aria-labelledby="tLog" novalidate hidden>
+          <div class="g2">
+            <div class="fld"><label for="lSid">학번 5자리</label><input type="text" id="lSid" inputmode="numeric" maxlength="5" autocomplete="username"></div>
+            <div class="fld"><label for="lPw">비밀번호</label><input type="password" id="lPw" maxlength="20" autocomplete="current-password"></div>
+          </div>
+          <div class="row"><button class="btn p net" id="bLog" type="submit">로그인</button></div>
+        </form>
+      </div>
+      <div id="pwIn" hidden>
+        <p class="signed" id="pwWho"></p>
+        <div class="row"><button class="btn" id="bPwOut" type="button">로그아웃</button></div>
+      </div>
+    </div>
     <p class="msg" id="m2" role="status"></p>
   </section>
 
-  <section class="card" id="c3" data-st="wait">
+  <section class="card" id="c3p" data-st="wait" hidden>
+    <div class="hd"><h2><span class="n">3</span>새 비밀번호 정하기</h2><span class="st" id="st3p">대기</span></div>
+    <p class="sub">선생님이 비밀번호를 초기화했습니다. 앞으로 쓸 새 비밀번호를 정하세요. 4~20자로, 학번·이름·1234 같은 쉬운 조합은 쓸 수 없습니다.</p>
+    <form id="fChg" novalidate>
+      <div class="g2">
+        <div class="fld"><label for="nPw">새 비밀번호</label><input type="password" id="nPw" maxlength="20" autocomplete="new-password"></div>
+        <div class="fld"><label for="nPw2">새 비밀번호 확인</label><input type="password" id="nPw2" maxlength="20" autocomplete="new-password"></div>
+      </div>
+      <div class="row"><button class="btn p net" id="bChg" type="submit">비밀번호 바꾸기</button></div>
+    </form>
+    <p class="msg" id="m3p" role="status"></p>
+  </section>
+
+  <section class="card" id="c3" data-st="wait" data-mode="google">
     <div class="hd"><h2><span class="n">3</span>학번·이름 연결</h2><span class="st" id="st3">대기</span></div>
     <p class="sub">로그인한 계정에 내 학번을 한 번만 연결합니다. 한 번 연결하면 바꿀 수 없으니 정확히 입력하세요.</p>
     <div class="g2">
@@ -127,7 +177,7 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
 
   <section class="card" id="c6" data-st="wait">
     <div class="hd"><h2><span class="n">6</span>진단</h2><span class="st" id="st6">기록 0건</span></div>
-    <p class="sub">각 단계의 결과와 이 기기 정보입니다. 로그인 토큰, 전체 이메일, HTML 내용은 들어가지 않습니다.</p>
+    <p class="sub">각 단계의 결과와 이 기기 정보입니다. 비밀번호, 로그인 토큰, 전체 이메일, HTML 내용은 들어가지 않습니다.</p>
     <div class="row"><button class="btn p" id="bCopy" type="button">진단 결과 복사</button></div>
     <dl class="kv mono" id="envL"></dl>
     <div class="tbl"><table id="diagT"><thead><tr><th>단계</th><th>결과</th><th>응답 ms</th><th>오류 코드</th><th>시각</th></tr></thead><tbody id="diagB"></tbody></table></div>
@@ -141,14 +191,17 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
       <button class="btn net" id="bLPing" type="button">연결 확인 동시 요청</button>
       <button class="btn net" id="bLSub" type="button">제출 동시 요청</button>
     </div>
-    <p class="sub">제출 시험은 로그인과 학번 연결이 필요합니다. 학생 학번 대신 선생님용 시험 학번으로 연결한 계정에서 하세요. 요청 수만큼 드라이브에 파일이 생깁니다.</p>
+    <p class="sub" data-mode="google">제출 시험은 로그인과 학번 연결이 필요합니다. 학생 학번 대신 선생님용 시험 학번으로 연결한 계정에서 하세요. 요청 수만큼 드라이브에 파일이 생깁니다.</p>
+    <p class="sub" data-mode="password">제출 시험은 지금 로그인한 학번과 비밀번호로 보냅니다. 학생 학번 말고 선생님용 시험 학번으로 먼저 로그인하세요. 요청 수만큼 드라이브에 파일이 생깁니다.</p>
     <pre id="lres" aria-live="polite"></pre>
   </details>
 </main>
 <div id="toast" role="status"></div>
 
 <script>
-const CONFIG = { GOOGLE_CLIENT_ID: '242824104003-pp3klam6argfs6jgh37qpcgso4gonngi.apps.googleusercontent.com', WEB_APP_URL: 'https://script.google.com/macros/s/AKfycbx7O00duLbWijtgOQQzjWc9BFB2le3dWreiqcmZYD3ppkvQLDffucAaUSkUJXbmscY8eA/exec', LOAD_TEST_N: 30 };
+const CONFIG = { GOOGLE_CLIENT_ID: '242824104003-pp3klam6argfs6jgh37qpcgso4gonngi.apps.googleusercontent.com', WEB_APP_URL: 'https://script.google.com/macros/s/AKfycbx7O00duLbWijtgOQQzjWc9BFB2le3dWreiqcmZYD3ppkvQLDffucAaUSkUJXbmscY8eA/exec', LOAD_TEST_N: 30, AUTH_MODE: 'password' };
+// AUTH_MODE: 'password' = 학번+비밀번호 (기본), 'google' = 구글 로그인 (학교 관리자가 막아 두어 현재 끔)
+const PW_MODE = CONFIG.AUTH_MODE !== 'google';
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const ID_RE = /^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-3]\d|40)$/;
@@ -170,16 +223,27 @@ const ERR = {
   TIMEOUT: '서버 응답이 45초 넘게 없습니다. 잠시 뒤 다시 해 보세요.',
   BAD_RESPONSE: '서버 응답을 읽지 못했습니다. 웹 앱 배포의 액세스 권한 설정을 선생님이 확인해야 합니다.',
   NO_TOKEN: '먼저 2번에서 로그인하세요.',
-  CONFIG: '설정이 비어 있어 서버에 접속할 수 없습니다.'
+  NO_LOGIN: '먼저 2번에서 로그인하세요.',
+  CONFIG: '설정이 비어 있어 서버에 접속할 수 없습니다.',
+  NOT_REGISTERED: '등록되지 않은 학번입니다. "처음이에요: 등록"에서 먼저 등록하세요.',
+  ALREADY_REGISTERED: '이미 등록된 학번입니다. "등록했어요: 로그인"으로 들어가세요. 내가 등록한 게 아니면 선생님께 알리세요.',
+  WRONG_PASSWORD: '비밀번호가 틀렸습니다. 다시 입력하세요. 잊었으면 선생님께 초기화를 요청하세요.',
+  LOCKED: '비밀번호를 여러 번 틀렸어요. 5분 뒤에 다시 하거나 선생님께 말하세요.',
+  WEAK_PASSWORD: '너무 쉬운 비밀번호예요. 4~20자로, 학번·이름·1234 같은 쉬운 조합은 피하세요.',
+  SESSION_EXPIRED: '로그인이 끝났어요. 다시 로그인해 주세요.',
+  MUST_CHANGE_PASSWORD: '새 비밀번호를 먼저 정해야 합니다. 3번에서 바꾸세요.'
 };
+if (PW_MODE) ERR.NAME_MISMATCH = '명단에 있는 이름과 다릅니다. 명단과 똑같이 입력하세요. 띄어쓰기도 확인하세요.';
 const errText = (code, msg) => ERR[code] || (/^HTTP_/.test(code) ? '서버가 오류 응답(' + code.slice(5) + ')을 보냈습니다. 잠시 뒤 다시 해 보세요.' : (msg || '알 수 없는 오류입니다.'));
 
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const cfgOk = !/YOUR_/.test(CONFIG.GOOGLE_CLIENT_ID + CONFIG.WEB_APP_URL);
+const cfgOk = !/YOUR_/.test(CONFIG.WEB_APP_URL) && (PW_MODE || !/YOUR_/.test(CONFIG.GOOGLE_CLIENT_ID));
 
-// 상태: 토큰은 이 변수에만 둔다. 저장소에 쓰지 않는다.
+// 상태: 토큰과 학번·비밀번호는 이 변수에만 둔다. 저장소(localStorage, 쿠키 등)에 쓰지 않는다.
 let idToken = null;
+let auth = null;        // 비밀번호 방식: { studentId, name, session, mustChange, resetPw }
+                        // resetPw는 초기화 직후(mustChange) 새 비밀번호를 정할 때까지만 두고 바로 지운다.
 let me = null;          // whoami 결과
 let gisState = '로드 중'; // 로드 중 / 로드됨 / 실패
 let busy = {};
@@ -216,6 +280,17 @@ function envInfo() {
   try { host = new URL(CONFIG.WEB_APP_URL).host; } catch (e) { host = '(잘못된 주소)'; }
   const uad = navigator.userAgentData;
   const domain = me && (me.domain || (me.email ? String(me.email).split('@')[1] : '')) || '(로그인 전)';
+  const authRows = PW_MODE ? [
+    ['인증 방식', '비밀번호'],
+    ['로그인', auth ? '됨' : '안 됨']
+  ] : [
+    ['인증 방식', '구글'],
+    ['구글 로그인 스크립트', gisState],
+    ['FedCM 지원', 'IdentityCredential' in window ? '예' : '아니오'],
+    ['서드파티 쿠키', '알 수 없음'],
+    ['로그인 도메인', domain],
+    ['학번 연결', me && me.studentId ? '됨' : '안 됨']
+  ];
   return [
     ['브라우저', navigator.userAgent],
     ['플랫폼', uad ? (uad.platform || '?') + (uad.mobile ? ' (모바일)' : '') : '(정보 없음)'],
@@ -224,13 +299,8 @@ function envInfo() {
     ['온라인', navigator.onLine ? '예' : '아니오'],
     ['페이지', location.origin],
     ['서버 주소', host],
-    ['설정', cfgOk ? '입력됨' : '비어 있음'],
-    ['구글 로그인 스크립트', gisState],
-    ['FedCM 지원', 'IdentityCredential' in window ? '예' : '아니오'],
-    ['서드파티 쿠키', '알 수 없음'],
-    ['로그인 도메인', domain],
-    ['학번 연결', me && me.studentId ? '됨' : '안 됨']
-  ];
+    ['설정', cfgOk ? '입력됨' : '비어 있음']
+  ].concat(authRows);
 }
 function renderEnv() {
   const dl = $('envL'); dl.textContent = '';
@@ -268,7 +338,13 @@ async function call(action, payload, opt) {
   const tAll = performance.now();
   for (let attempt = 0; ; attempt++) {
     const body = Object.assign({ action }, payload);
-    if (action !== 'ping') {
+    if (PW_MODE) {
+      // 제출·이력은 메모리에 있는 세션만 붙인다. register/login/change_password는 호출하는 쪽이 직접 넣는다.
+      if (action === 'submit' || action === 'list_mine') {
+        if (!auth || !auth.session) { if (!opt.quiet) logDiag(label, false, null, 'NO_LOGIN'); return { ok: false, code: 'NO_LOGIN', ms: 0, retries }; }
+        body.session = auth.session;
+      }
+    } else if (action !== 'ping') {
       if (!idToken) { if (!opt.quiet) logDiag(label, false, null, 'NO_TOKEN'); return { ok: false, code: 'NO_TOKEN', ms: 0, retries }; }
       body.idToken = idToken;
     }
@@ -303,11 +379,11 @@ async function call(action, payload, opt) {
       await sleep(base * Math.pow(2, retries - 1) + Math.random() * (code === 'BUSY' ? 2000 : 400));
       continue;
     }
-    if (code === 'TOKEN_INVALID' && !refreshed) {
+    if (!PW_MODE && code === 'TOKEN_INVALID' && !refreshed) {
       refreshed = true;
       if (await refreshToken()) continue;
     }
-    if (code === 'TOKEN_INVALID') signedOut('다시 로그인해 주세요.');
+    if (!PW_MODE && code === 'TOKEN_INVALID') signedOut('다시 로그인해 주세요.');
     return { ok: false, code, message: data && data.message, data, ms, totalMs, retries };
   }
 }
@@ -427,6 +503,127 @@ async function doBind() {
   renderEnv();
 }
 
+/* ---------- 2·3. 비밀번호 방식 ---------- */
+// 서버와 같은 규칙: 4~20자, 학번 포함 금지, 이름과 같으면 안 됨, 같은 글자 반복 금지, 1234/abcd/4321 같은 연속 금지
+function isWeak(pw, id, name) {
+  if (pw.length < 4 || pw.length > 20) return true;
+  if (id && pw.includes(id)) return true;
+  if (name && pw.trim() === name.trim()) return true;
+  if (/^(.)\1*$/.test(pw)) return true;
+  const s = pw.toLowerCase();
+  let up = true, down = true;
+  for (let i = 1; i < s.length; i++) {
+    const d = s.charCodeAt(i) - s.charCodeAt(i - 1);
+    if (d !== 1) up = false;
+    if (d !== -1) down = false;
+  }
+  return up || down;
+}
+function pwCheck(id, name, pw, pw2) {
+  if (isWeak(pw, id, name)) return ERR.WEAK_PASSWORD;
+  if (pw !== pw2) return '비밀번호 확인이 다릅니다. 두 칸에 똑같이 입력하세요.';
+  return '';
+}
+function badId() { return '학번 형식이 맞지 않습니다. 학년 1자리, 반 2자리, 번호 2자리로 5자리를 쓰세요. 예: 20315'; }
+function setTab(reg) {
+  $('tReg').setAttribute('aria-selected', String(reg));
+  $('tLog').setAttribute('aria-selected', String(!reg));
+  $('fReg').hidden = !reg; $('fLog').hidden = reg;
+  msg(2, '');
+}
+function pwSignedIn(note) {
+  ['rPw', 'rPw2', 'lPw'].forEach(i => { $(i).value = ''; });
+  $('pwForms').hidden = true; $('pwIn').hidden = false;
+  const who = '로그인됨: ' + auth.studentId + ' ' + (auth.name || '');
+  $('pwWho').textContent = who; $('hwho').textContent = who;
+  setSt(2, 'ok'); msg(2, note || '', note ? 'ok' : '');
+  showMustChange();
+  renderEnv(); refresh();
+}
+function showMustChange() {
+  const c = $('c3p');
+  if (auth && auth.mustChange) {
+    c.hidden = false; setSt('3p', 'wait', '필요'); msg('3p', '');
+    msg(2, '선생님이 비밀번호를 초기화했습니다. 3번에서 새 비밀번호를 정하세요.', 'warn');
+    $('nPw').focus();
+  }
+}
+async function doRegister(e) {
+  e.preventDefault();
+  const id = $('rSid').value.trim(), name = $('rName').value.trim();
+  if (!ID_RE.test(id)) { setSt(2, 'bad'); msg(2, badId(), 'bad'); $('rSid').focus(); return; }
+  if (!name || name.length > 20) { setSt(2, 'bad'); msg(2, '이름을 1~20자로 입력하세요.', 'bad'); $('rName').focus(); return; }
+  const w = pwCheck(id, name, $('rPw').value, $('rPw2').value);
+  if (w) { setSt(2, 'bad'); msg(2, w, 'bad'); $('rPw').focus(); return; }
+  busy.auth = true; refresh(); setSt(2, 'run'); msg(2, '등록하는 중입니다.');
+  const r = await call('register', { studentId: id, name, password: $('rPw').value });
+  $('rPw').value = ''; $('rPw2').value = '';
+  busy.auth = false; refresh();
+  if (!r.ok) { setSt(2, 'bad'); msg(2, errText(r.code, r.message), 'bad'); if (r.code === 'ALREADY_REGISTERED') $('lSid').value = id; return; }
+  // 비밀번호는 메모리에 남기지 않는다. 이후 요청은 세션만 쓴다.
+  auth = { studentId: r.data.studentId || id, name: r.data.name || name, session: r.data.session || null, mustChange: false };
+  pwSignedIn('등록했습니다. 다음에는 "등록했어요: 로그인"으로 들어오세요.');
+}
+async function doLogin(e) {
+  e.preventDefault();
+  const id = $('lSid').value.trim();
+  if (!ID_RE.test(id)) { setSt(2, 'bad'); msg(2, badId(), 'bad'); $('lSid').focus(); return; }
+  if (!$('lPw').value) { setSt(2, 'bad'); msg(2, '비밀번호를 입력하세요.', 'bad'); $('lPw').focus(); return; }
+  busy.auth = true; refresh(); setSt(2, 'run'); msg(2, '로그인하는 중입니다.');
+  let pw = $('lPw').value;
+  $('lPw').value = '';
+  const r = await call('login', { studentId: id, password: pw });
+  busy.auth = false; refresh();
+  if (!r.ok) { pw = null; setSt(2, 'bad'); msg(2, errText(r.code, r.message), 'bad'); return; }
+  const must = !!r.data.mustChange;
+  auth = { studentId: r.data.studentId || id, name: r.data.name || '', session: must ? null : (r.data.session || null), mustChange: must };
+  // 초기화 직후에는 세션이 없으므로, 새 비밀번호를 정할 때까지만 임시 비밀번호(학번)를 둔다.
+  if (must) auth.resetPw = pw;
+  pw = null;
+  pwSignedIn('');
+}
+async function doChange(e) {
+  e.preventDefault();
+  if (!auth || !auth.resetPw) return;
+  const w = pwCheck(auth.studentId, auth.name, $('nPw').value, $('nPw2').value);
+  if (w) { setSt('3p', 'bad'); msg('3p', w, 'bad'); $('nPw').focus(); return; }
+  busy.chg = true; refresh(); setSt('3p', 'run'); msg('3p', '바꾸는 중입니다.');
+  const r = await call('change_password', { studentId: auth.studentId, password: auth.resetPw, newPassword: $('nPw').value });
+  busy.chg = false;
+  if (!r.ok) {
+    setSt('3p', 'bad'); msg('3p', errText(r.code, r.message), 'bad');
+    if (r.code === 'WRONG_PASSWORD' || r.code === 'SESSION_EXPIRED' || r.code === 'LOCKED') { pwAfterError('SESSION_EXPIRED', errText(r.code, r.message)); }
+    refresh(); return;
+  }
+  $('nPw').value = ''; $('nPw2').value = '';
+  delete auth.resetPw;
+  auth.session = r.data.session || null; auth.mustChange = false;
+  setSt('3p', 'ok'); msg('3p', '비밀번호를 바꿨습니다. 다음부터 새 비밀번호로 로그인하세요.', 'ok');
+  msg(2, '');
+  renderEnv(); refresh();
+}
+function pwSignOut(note) {
+  auth = null;
+  ['rPw', 'rPw2', 'lPw', 'nPw', 'nPw2'].forEach(i => { $(i).value = ''; });
+  $('pwForms').hidden = false; $('pwIn').hidden = true; $('c3p').hidden = true;
+  $('pwWho').textContent = ''; $('hwho').textContent = '로그인 전';
+  $('listB').textContent = ''; $('listWrap').hidden = true;
+  [2].concat(note ? [] : [4, 5]).forEach(n => { setSt(n, 'wait'); msg(n, ''); });
+  setTab(false);
+  if (note) { setSt(2, 'bad'); msg(2, note, 'bad'); }
+  renderEnv(); refresh();
+}
+// 제출·이력 중 세션 관련 오류가 오면 세션을 지우고 로그인 탭으로 돌려보낸다
+function pwAfterError(code, text) {
+  if (!PW_MODE || !auth) return;
+  if (code === 'SESSION_EXPIRED' || code === 'MUST_CHANGE_PASSWORD' || code === 'NOT_REGISTERED') {
+    const lastId = auth.studentId;
+    pwSignOut(text || (code === 'MUST_CHANGE_PASSWORD' ? '새 비밀번호를 정해야 해요. 학번으로 다시 로그인하세요.' : ERR[code]));
+    $('lSid').value = lastId || '';
+    $('lPw').focus();
+  }
+}
+
 /* ---------- 4. 제출 ---------- */
 // 클릭 1번당 1개. 재시도 때는 같은 값을 다시 보내 서버가 중복 저장을 막는다(duplicate:true = 성공).
 function newRequestId() {
@@ -456,7 +653,7 @@ async function doSubmit() {
   busy.submit = true; refresh(); setSt(4, 'run'); msg(4, '제출하는 중입니다.');
   const r = await call('submit', { html: $('html').value, requestId: newRequestId() });
   busy.submit = false; refresh();
-  if (!r.ok) { setSt(4, 'bad'); msg(4, errText(r.code, r.message), 'bad'); return; }
+  if (!r.ok) { setSt(4, 'bad'); msg(4, errText(r.code, r.message), 'bad'); pwAfterError(r.code); return; }
   const d = r.data;
   setSt(4, 'ok');
   msg(4, (d.duplicate ? '이미 저장된 제출입니다. ' : '제출했습니다. ') + '버전 ' + d.version + ', ' + fmtSize(d.size || 0) + ', ' + fmtTime(d.submittedAt) + ', 해시 ' + String(d.sha256 || '').slice(0, 12), 'ok');
@@ -468,7 +665,7 @@ async function doList() {
   busy.list = true; refresh(); setSt(5, 'run'); msg(5, '불러오는 중입니다.');
   const r = await call('list_mine');
   busy.list = false; refresh();
-  if (!r.ok) { setSt(5, 'bad'); msg(5, errText(r.code, r.message), 'bad'); return; }
+  if (!r.ok) { setSt(5, 'bad'); msg(5, errText(r.code, r.message), 'bad'); pwAfterError(r.code); return; }
   const items = Array.isArray(r.data.items) ? r.data.items.slice() : [];
   items.sort((a, b) => (b.version || 0) - (a.version || 0));
   const tb = $('listB'); tb.textContent = '';
@@ -529,8 +726,8 @@ async function loadPing() {
 }
 async function loadSubmit() {
   const n = loadN();
-  if (!idToken || !(me && me.studentId)) { $('lres').textContent = '로그인하고 학번을 연결한 뒤에 할 수 있습니다. 선생님용 시험 학번을 쓰세요.'; return; }
-  if (!confirm('학번 ' + me.studentId + '(으)로 시험용 HTML을 ' + n + '번 제출합니다. 드라이브에 파일 ' + n + '개가 생깁니다. 계속할까요?')) return;
+  if (!ready()) { $('lres').textContent = PW_MODE ? '선생님용 시험 학번으로 로그인한 뒤에 할 수 있습니다.' : '로그인하고 학번을 연결한 뒤에 할 수 있습니다. 선생님용 시험 학번을 쓰세요.'; return; }
+  if (!confirm('학번 ' + curId() + '(으)로 시험용 HTML을 ' + n + '번 제출합니다. 드라이브에 파일 ' + n + '개가 생깁니다. 계속할까요?')) return;
   busy.load = true; refresh(); $('lres').textContent = '제출 ' + n + '회를 0~5초 간격으로 보내는 중입니다.';
   const t0 = performance.now();
   const res = await Promise.all(Array.from({ length: n }, async (_, i) => {
@@ -546,14 +743,20 @@ async function loadSubmit() {
 }
 
 /* ---------- 버튼 상태 ---------- */
+// 제출할 수 있는 상태인가: 비밀번호 방식은 로그인했고 새 비밀번호 설정이 끝남, 구글 방식은 로그인+학번 연결
+function ready() { return PW_MODE ? !!(auth && !auth.mustChange && auth.session) : !!(idToken && me && me.studentId); }
+function curId() { return PW_MODE ? (auth && auth.studentId) : (me && me.studentId); }
 function refresh() {
   const bound = !!(me && me.studentId);
   $('bPing').disabled = !cfgOk || busy.ping;
   $('bBind').disabled = !cfgOk || !idToken || !me || bound || busy.bind;
-  $('bSubmit').disabled = !cfgOk || !idToken || !htmlValid() || busy.submit;
-  $('bList').disabled = !cfgOk || !idToken || busy.list;
+  $('bReg').disabled = $('bLog').disabled = !cfgOk || !!busy.auth;
+  $('bChg').disabled = !cfgOk || !auth || !!busy.chg;
+  const canUse = PW_MODE ? ready() : !!idToken;
+  $('bSubmit').disabled = !cfgOk || !canUse || !htmlValid() || busy.submit;
+  $('bList').disabled = !cfgOk || !canUse || busy.list;
   $('bLPing').disabled = !cfgOk || busy.load;
-  $('bLSub').disabled = !cfgOk || !idToken || !bound || busy.load;
+  $('bLSub').disabled = !cfgOk || !ready() || busy.load;
 }
 
 /* ---------- 시작 ---------- */
@@ -566,15 +769,32 @@ $('bOut').addEventListener('click', () => { logDiag('로그아웃', true, null, 
 $('bLPing').addEventListener('click', loadPing);
 $('bLSub').addEventListener('click', loadSubmit);
 $('html').addEventListener('input', () => { clearTimeout(checkHtml.t); checkHtml.t = setTimeout(checkHtml, 150); });
-$('sid').addEventListener('input', e => { const v = e.target.value.replace(/\D/g, ''); if (v !== e.target.value) e.target.value = v; });
+['sid', 'rSid', 'lSid'].forEach(i => $(i).addEventListener('input', e => { const v = e.target.value.replace(/\D/g, ''); if (v !== e.target.value) e.target.value = v; }));
+$('tReg').addEventListener('click', () => setTab(true));
+$('tLog').addEventListener('click', () => setTab(false));
+$('fReg').addEventListener('submit', doRegister);
+$('fLog').addEventListener('submit', doLogin);
+$('fChg').addEventListener('submit', doChange);
+$('bPwOut').addEventListener('click', () => { logDiag('로그아웃', true, null, ''); pwSignOut(); });
+// 방식에 맞지 않는 부분은 숨긴다
+document.querySelectorAll('[data-mode]').forEach(el => { if (el.dataset.mode !== (PW_MODE ? 'password' : 'google')) el.hidden = true; });
 $('ln').value = Math.min(50, CONFIG.LOAD_TEST_N);
 function teacherMode() { $('c7').hidden = location.hash !== '#teacher'; }
 addEventListener('hashchange', teacherMode); teacherMode();
 addEventListener('online', renderEnv); addEventListener('offline', renderEnv);
 if (!cfgOk) $('cfgWarn').hidden = false;
-setTimeout(() => { if (gisState === '로드 중') gisFail(); }, 15000);
-renderGBtn(); renderEnv(); checkHtml(); refresh();
+// 구글 로그인 스크립트는 구글 방식일 때만 불러온다
+if (!PW_MODE) {
+  const gs = document.createElement('script');
+  gs.src = 'https://accounts.google.com/gsi/client'; gs.async = true;
+  gs.onload = gisReady; gs.onerror = gisFail;
+  document.head.appendChild(gs);
+  setTimeout(() => { if (gisState === '로드 중') gisFail(); }, 15000);
+  renderGBtn();
+} else {
+  gisState = '사용 안 함';
+}
+renderEnv(); checkHtml(); refresh();
 </script>
-<script src="https://accounts.google.com/gsi/client" async defer onload="gisReady()" onerror="gisFail()"></script>
 </body>
 </html>
