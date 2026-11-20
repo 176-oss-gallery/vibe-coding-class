@@ -229,7 +229,7 @@ test('캐시 TTL', () => {
 });
 
 test('설정 읽기: 기본값', () => {
-  const d = { roster_required: true, allowed_domains: [], max_html_bytes: 2097152, session_open: true, submit_per_minute: 5, allow_personal: false };
+  const d = { roster_required: true, allowed_domains: [], max_html_bytes: 2097152, session_open: true, submit_per_minute: 5, allow_personal: false, auth_mode: 'password' };
   eq(G.parseConfig([]), d);
   eq(G.parseConfig([['키', '값'], ['allow_personal', 'TRUE']]).allow_personal, true);
   eq(G.parseConfig([['키', '값'], ['allow_personal', '모름']]).allow_personal, false);
@@ -291,9 +291,12 @@ const TOKENS = {
 const ALL_SECRETS = Object.keys(TOKENS);
 const ALL_EMAILS = ['alice@school.kr', 'bob@school.kr', 'carol@school.kr', 'dave@gmail.com'];
 
+const PEPPER = 'PEPPER-SECRET-q9z8';
 function makeDeps(over) {
   const st = {
-    cfg: { roster_required: true, allowed_domains: [], max_html_bytes: 4096, session_open: true },
+    cfg: { roster_required: true, allowed_domains: [], max_html_bytes: 4096, session_open: true, auth_mode: 'google' },
+    accounts: [], fails: {}, pepper: PEPPER, saltSeq: 0, sessions: new Map(), sv: {}, globalFails: 0,
+    inLock: false, lockHashes: 0, hashedInLock: false,
     roster: { '10101': '김하늘', '10102': '이바다', '10103': '박구름' },
     bindings: [], subs: [], files: new Map(), rateOk: true, discarded: [], logs: [], lockOk: true, locks: 0, releases: 0, seq: 0,
     t: Date.parse('2026-11-20T01:00:00Z')
@@ -317,10 +320,40 @@ function makeDeps(over) {
       return id;
     },
     appendSubmission: (row) => { st.subs.push(Object.assign({}, row)); },
-    sha256Hex: (text) => require('crypto').createHash('sha256').update(text, 'utf8').digest('hex'),
-    tryLock: () => { st.locks++; return st.lockOk; },
-    releaseLock: () => { st.releases++; },
-    log: (m) => { st.logs.push(String(m)); }
+    sha256Hex: (text) => (st.inLock && st.lockHashes++, require('crypto').createHash('sha256').update(text, 'utf8').digest('hex')),
+    tryLock: () => { st.locks++; st.inLock = st.lockOk; st.lockHashes = 0; return st.lockOk; },
+    releaseLock: () => { st.releases++; if (st.lockHashes > 10) st.hashedInLock = true; st.inLock = false; },
+    log: (m) => { st.logs.push(String(m)); },
+    readAccounts: () => st.accounts.map((a, i) => Object.assign({}, a, { row: i + 2 })),
+    appendAccount: (a) => { st.accounts.push({ id: a.id, name: a.name, hash: a.hash, salt: a.salt, reset: false, resetAt: '', at: a.at }); },
+    updateAccountPassword: (id, p) => {
+      const a = st.accounts.find((x) => x.id === id);
+      if (!a) return false;
+      Object.assign(a, { hash: p.hash, salt: p.salt, reset: false, resetAt: '', changedAt: p.at });
+      return true;
+    },
+    getPepper: () => st.pepper,
+    newSalt: () => 'salt' + (++st.saltSeq),
+    reserveAttempt: (id) => {
+      const n = st.fails[id] || 0;
+      if (n >= 5) return { ok: false };
+      st.fails[id] = n + 1;
+      return { ok: true };
+    },
+    clearFails: (id) => { delete st.fails[id]; },
+    globalFails: () => st.globalFails,
+    addGlobalFail: () => { st.globalFails++; },
+    newSession: (id) => {
+      const token = require('crypto').randomBytes(20).toString('hex');
+      st.sessions.set(token, { id, v: st.sv[id] || 0, iat: st.t });
+      return token;
+    },
+    resolveSession: (token) => {
+      const x = st.sessions.get(token);
+      if (!x || x.v !== (st.sv[x.id] || 0)) return null;
+      return { id: x.id, issuedAt: x.iat };
+    },
+    bumpSessionVersion: (id) => { st.sv[id] = (st.sv[id] || 0) + 1; }
   };
   Object.assign(deps, over || {});
   return { deps, st };
@@ -683,6 +716,310 @@ test('모든 응답에 토큰 문자열·다른 사람 이메일 없음', () => 
   }
 });
 
+// ═════════ 비밀번호 방식 (auth_mode = password) ═════════
+
+const PW_ALL = ['sky-PW-1234', 'sea-PW-5678', 'new-PW-9999', 'wrongPW-000', 'newer-PW-77', PEPPER];
+const PW_RESP = [];
+function pcall(deps, obj) {
+  const r = J(G.handleRequest(JSON.stringify(obj), deps));
+  PW_RESP.push(r);
+  return r;
+}
+function pwDeps(over) {
+  const x = makeDeps(over);
+  x.st.cfg.auth_mode = 'password';
+  return x;
+}
+const sha = (t) => require('crypto').createHash('sha256').update(t, 'utf8').digest('hex');
+// 선생님이 초기화 칸에 Y 를 쓴 것처럼 (onEdit 가 시각을 기록)
+function teacherReset(st, id, agoMs) {
+  const a = st.accounts.find((x) => x.id === id);
+  st.t += (agoMs || 0) + 1000; // 시간이 흐른 뒤 초기화 (세션 발급 이후)
+  a.reset = true;
+  a.resetAt = new Date(st.t - (agoMs || 0));
+}
+
+test('설정 읽기: auth_mode 기본 password, 잘못된 값도 password', () => {
+  assert.strictEqual(G.parseConfig([]).auth_mode, 'password');
+  assert.strictEqual(G.parseConfig([['키', '값'], ['auth_mode', ' Google ']]).auth_mode, 'google');
+  assert.strictEqual(G.parseConfig([['키', '값'], ['auth_mode', 'oauth']]).auth_mode, 'password');
+  assert.strictEqual(G.parseConfig([['키', '값'], ['auth_mode', '']]).auth_mode, 'password');
+});
+
+test('hashPassword: 결정적, 솔트·페퍼·반복에 따라 달라짐', () => {
+  const h1 = G.hashPassword('abcd', 's1', 'p', sha, 300);
+  assert.strictEqual(h1, G.hashPassword('abcd', 's1', 'p', sha, 300));
+  assert.ok(/^[0-9a-f]{64}$/.test(h1));
+  assert.notStrictEqual(h1, G.hashPassword('abcd', 's2', 'p', sha, 300));
+  assert.notStrictEqual(h1, G.hashPassword('abcd', 's1', 'q', sha, 300));
+  assert.notStrictEqual(h1, G.hashPassword('abce', 's1', 'p', sha, 300));
+  assert.notStrictEqual(h1, G.hashPassword('abcd', 's1', 'p', sha, 299));
+  let h = 'abcd';
+  for (let i = 0; i < 3; i++) h = sha(h + 's1' + 'p');
+  assert.strictEqual(G.hashPassword('abcd', 's1', 'p', sha, 3), h, '정의대로 반복');
+  assert.strictEqual(G.ITERATIONS, 300);
+  assert.strictEqual(G.safeEqual('abc', 'abc'), true);
+  assert.strictEqual(G.safeEqual('abc', 'abd'), false);
+  assert.strictEqual(G.safeEqual('abc', 'abcd'), false);
+  assert.strictEqual(G.safeEqual('', 'a'), false);
+  assert.strictEqual(G.safeEqual('', ''), true);
+});
+
+test('validatePassword: 길이·제어문자·쉬운 비밀번호·학번/이름', () => {
+  for (const ok of ['sky7', ' a b ', 'k9#x'.repeat(5), '1243', 'abce', 'Tiger-77']) {
+    assert.strictEqual(G.validatePassword(ok, '10101', '김하늘아'), null, JSON.stringify(ok));
+  }
+  const weak = ['abc', 'a'.repeat(21), 'ab\ncd', 'ab\tcd', 'ab\u0000c', 5, null, undefined, ['abcd'],
+    'aaaa', '0000', '7777777', '1234', '4321', '123456789', '9876', 'abcd', 'DCBA', 'AbCdE',
+    'password', 'PassWord', 'qwer', 'QWERTY', 'asdf', '1q2w3e', '1111', '12345', 'abcd1234',
+    '10101', 'my10101', '10101ab', '김하늘아', '김 하늘 아'];
+  for (const bad of weak) {
+    assert.strictEqual(G.validatePassword(bad, '10101', '김하늘아'), 'WEAK_PASSWORD', JSON.stringify(bad));
+  }
+  assert.strictEqual(G.validatePassword('김하늘아', '10101'), null, '이름을 안 주면 이름 비교 안 함');
+  assert.strictEqual(G.isLocked(4), false);
+  assert.strictEqual(G.isLocked(5), true);
+  assert.strictEqual(G.LOCK_AFTER, 5);
+  assert.strictEqual(G.LOCK_SEC, 300);
+});
+
+test('resetActive: 초기화=Y 이고 10분 이내만', () => {
+  const now = Date.parse('2026-11-20T01:00:00Z');
+  assert.strictEqual(G.resetActive({ reset: true, resetAt: new Date(now - 60000) }, now), true);
+  assert.strictEqual(G.resetActive({ reset: true, resetAt: new Date(now - 600000) }, now), true, '정확히 10분');
+  assert.strictEqual(G.resetActive({ reset: true, resetAt: new Date(now - 601000) }, now), false, '만료');
+  assert.strictEqual(G.resetActive({ reset: true, resetAt: new Date(now - 60000).toISOString() }, now), true, '문자열 시각');
+  assert.strictEqual(G.resetActive({ reset: true, resetAt: '' }, now), false, '시각 없음');
+  assert.strictEqual(G.resetActive({ reset: false, resetAt: new Date(now) }, now), false);
+  assert.strictEqual(G.resetActive({ reset: true, resetAt: new Date(now + 3600000) }, now), false, '미래 시각');
+  assert.strictEqual(G.resetActive(null, now), false);
+  assert.strictEqual(G.RESET_WINDOW_SEC, 600);
+});
+
+test('register: 성공(세션 발급)·명단 없음·이름 불일치·중복·약한 비밀번호', () => {
+  const { deps, st } = pwDeps();
+  let r = pcall(deps, { action: 'register', studentId: ' 10101 ', name: '김 하늘', password: 'sky-PW-1234' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(r.studentId, '10101');
+  assert.strictEqual(r.name, '김 하늘');
+  assert.ok(typeof r.session === 'string' && r.session.length >= 16, '세션');
+  assert.strictEqual(st.accounts.length, 1);
+  assert.notStrictEqual(st.accounts[0].hash, 'sky-PW-1234', '평문 저장 금지');
+  assert.strictEqual(st.accounts[0].hash, G.hashPassword('sky-PW-1234', st.accounts[0].salt, PEPPER, sha, 300));
+  assert.strictEqual(st.hashedInLock, false, '해시는 잠금 밖에서');
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '10109', name: '아무개', password: 'sky-PW-1234' }).code, 'NOT_IN_ROSTER');
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '10102', name: '이바닥', password: 'sea-PW-5678' }).code, 'NAME_MISMATCH');
+  // 명단에 이름이 비어 있으면 아무 이름으로나 등록되지 않게 거부
+  st.roster['10104'] = '';
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '10104', name: '아무나', password: 'sea-PW-5678' }).code, 'NOT_IN_ROSTER');
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sea-PW-5678' }).code, 'ALREADY_REGISTERED');
+  for (const pw of ['10102', 'x10102', 'abc', '1234', 'qwerty', '이바다']) {
+    assert.strictEqual(pcall(deps, { action: 'register', studentId: '10102', name: '이바다', password: pw }).code, 'WEAK_PASSWORD', pw);
+  }
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '10102', name: '', password: 'sea-PW-5678' }).code, 'BAD_REQUEST');
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '40102', name: '이바다', password: 'sea-PW-5678' }).code, 'BAD_REQUEST');
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '10102', name: '이바다', password: 1234 }).code, 'BAD_REQUEST');
+  assert.strictEqual(st.accounts.length, 1);
+  st.cfg.roster_required = false;
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '10109', name: '아무개', password: 'sea-PW-5678' }).ok, true, '명단 필수 아님');
+  assert.strictEqual(st.locks, st.releases);
+  st.pepper = null;
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '10103', name: '박구름', password: 'sea-PW-5678' }).code, 'SERVER_ERROR', '페퍼 없음');
+});
+
+test('login: 성공(세션)·틀림·미등록, 시도 5번이면 맞아도 LOCKED', () => {
+  const { deps, st } = pwDeps();
+  pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
+  const ok = pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' });
+  assert.strictEqual(ok.ok, true);
+  assert.strictEqual(ok.mustChange, false);
+  assert.strictEqual(ok.name, '김하늘');
+  assert.ok(typeof ok.session === 'string' && ok.session.length >= 16);
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10102', password: 'sky-PW-1234' }).code, 'NOT_REGISTERED');
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'wrongPW-000' }).code, 'WRONG_PASSWORD');
+  assert.strictEqual(st.fails['10101'], 1, '시도 횟수');
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).ok, true);
+  assert.strictEqual(st.fails['10101'], undefined, '성공하면 초기화');
+  for (let i = 0; i < 5; i++) assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'wrongPW-000' }).code, 'WRONG_PASSWORD');
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).code, 'LOCKED');
+  assert.strictEqual(pcall(deps, { action: 'submit', studentId: '10101', password: 'sky-PW-1234', html: PAGE }).code, 'LOCKED');
+  delete st.fails['10101']; // 5분 지남
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).ok, true);
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101' }).code, 'BAD_REQUEST', '비밀번호 없음');
+  // 시도 예약 실패(짧은 잠금 실패) → BUSY
+  const d2 = pwDeps({ reserveAttempt: () => ({ ok: false, busy: true }) });
+  pcall(d2.deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
+  assert.strictEqual(pcall(d2.deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).code, 'BUSY');
+});
+
+test('login: 시도 예약은 해시 계산 전에 (동시 요청 경쟁 방지)', () => {
+  const order = [];
+  const x = pwDeps();
+  pcall(x.deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
+  const r0 = x.deps.reserveAttempt, h0 = x.deps.sha256Hex;
+  x.deps.reserveAttempt = (id) => { order.push('reserve'); return r0(id); };
+  x.deps.sha256Hex = (t) => { if (order[order.length - 1] !== 'hash') order.push('hash'); return h0(t); };
+  pcall(x.deps, { action: 'login', studentId: '10101', password: 'wrongPW-000' });
+  eq(order, ['reserve', 'hash']);
+});
+
+test('전체 오답이 1분에 40번 넘으면 BUSY', () => {
+  const { deps, st } = pwDeps();
+  pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
+  pcall(deps, { action: 'register', studentId: '10102', name: '이바다', password: 'sea-PW-5678' });
+  pcall(deps, { action: 'login', studentId: '10102', password: 'wrongPW-000' });
+  assert.strictEqual(st.globalFails, 1);
+  st.globalFails = 40;
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).ok, true, '40 은 허용');
+  st.globalFails = 41;
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).code, 'BUSY');
+  assert.strictEqual(pcall(deps, { action: 'change_password', studentId: '10101', password: 'sky-PW-1234', newPassword: 'new-PW-9999' }).code, 'BUSY');
+  assert.strictEqual(st.fails['10101'], undefined, 'BUSY 는 시도 횟수를 쓰지 않음');
+});
+
+test('선생님 초기화: 10분 안에는 학번·기존 비밀번호 모두 mustChange, 세션 없음 → 변경 후 세션', () => {
+  const { deps, st } = pwDeps();
+  const reg = pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
+  teacherReset(st, '10101', 60000);
+  // 초기화 전에 받은 세션은 무효
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: reg.session }).code, 'SESSION_EXPIRED');
+  let r = pcall(deps, { action: 'login', studentId: '10101', password: '10101' });
+  eq(r, { ok: true, studentId: '10101', name: '김하늘', mustChange: true, session: null });
+  r = pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' });
+  assert.strictEqual(r.mustChange, true, '기존 비밀번호도 변경 필수');
+  assert.strictEqual(r.session, null);
+  assert.strictEqual(pcall(deps, { action: 'submit', studentId: '10101', password: '10101', html: PAGE }).code, 'MUST_CHANGE_PASSWORD');
+  assert.strictEqual(pcall(deps, { action: 'list_mine', studentId: '10101', password: '10101' }).code, 'MUST_CHANGE_PASSWORD');
+  assert.strictEqual(st.files.size, 0);
+  assert.strictEqual(pcall(deps, { action: 'change_password', studentId: '10101', password: '10101', newPassword: '10101' }).code, 'WEAK_PASSWORD');
+  assert.strictEqual(pcall(deps, { action: 'change_password', studentId: '10101', password: '10101', newPassword: 'ab' }).code, 'WEAK_PASSWORD');
+  assert.strictEqual(pcall(deps, { action: 'change_password', studentId: '10101', password: '10101' }).code, 'BAD_REQUEST');
+  const ch = pcall(deps, { action: 'change_password', studentId: '10101', password: '10101', newPassword: 'new-PW-9999' });
+  assert.strictEqual(ch.ok, true, JSON.stringify(ch));
+  assert.strictEqual(ch.studentId, '10101');
+  assert.ok(typeof ch.session === 'string');
+  assert.strictEqual(st.accounts[0].reset, false, '초기화 해제');
+  assert.strictEqual(st.accounts[0].resetAt, '', '초기화시각 해제');
+  assert.strictEqual(st.hashedInLock, false, '해시는 잠금 밖에서');
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: '10101' }).code, 'WRONG_PASSWORD');
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).code, 'WRONG_PASSWORD');
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'new-PW-9999' }).mustChange, false);
+  assert.strictEqual(pcall(deps, { action: 'submit', session: ch.session, html: PAGE }).ok, true, '변경 후 세션으로 제출');
+  assert.strictEqual(st.locks, st.releases);
+});
+
+test('선생님 초기화: 10분 지나면 학번으로는 안 되고 기존 비밀번호는 정상', () => {
+  const { deps, st } = pwDeps();
+  pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
+  teacherReset(st, '10101', 601000);
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: '10101' }).code, 'WRONG_PASSWORD');
+  const r = pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.mustChange, false);
+  // 시각 없이 Y 만 있으면(트리거 미동작) 초기화 아님
+  st.accounts[0].resetAt = '';
+  delete st.fails['10101'];
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: '10101' }).code, 'WRONG_PASSWORD');
+});
+
+test('세션: 비밀번호 변경 시 예전 세션 무효, 잘못된·만료 세션은 SESSION_EXPIRED, 행 삭제 시 무효', () => {
+  const { deps, st } = pwDeps();
+  const reg = pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
+  const s1 = pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).session;
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: s1 }).ok, true);
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: reg.session }).ok, true);
+  const ch = pcall(deps, { action: 'change_password', studentId: '10101', password: 'sky-PW-1234', newPassword: 'new-PW-9999' });
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: s1 }).code, 'SESSION_EXPIRED');
+  assert.strictEqual(pcall(deps, { action: 'submit', session: reg.session, html: PAGE }).code, 'SESSION_EXPIRED');
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: ch.session }).ok, true);
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: 'A'.repeat(40) }).code, 'SESSION_EXPIRED');
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: 'bad token!' }).code, 'SESSION_EXPIRED');
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: 12345 }).code, 'BAD_REQUEST');
+  st.sessions.clear(); // 6시간 지남
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: ch.session }).code, 'SESSION_EXPIRED');
+  const s2 = pcall(deps, { action: 'login', studentId: '10101', password: 'new-PW-9999' }).session;
+  st.accounts = []; // 선생님이 행 삭제
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: s2 }).code, 'SESSION_EXPIRED');
+  // 세션 경로는 해시를 계산하지 않음
+  pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
+  const s3 = pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).session;
+  let hashes = 0;
+  const h0 = deps.sha256Hex;
+  deps.sha256Hex = (t) => { hashes++; return h0(t); };
+  assert.strictEqual(pcall(deps, { action: 'submit', session: s3, html: PAGE }).ok, true);
+  assert.ok(hashes <= 1, '파일 해시 1번만: ' + hashes);
+});
+
+test('비밀번호 방식 submit: 세션·비밀번호 둘 다, v1·v2 보관, 이메일 칸 비움, list_mine 은 내 것만', () => {
+  const { deps, st } = pwDeps();
+  const sa = pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' }).session;
+  pcall(deps, { action: 'register', studentId: '10102', name: '이바다', password: 'sea-PW-5678' });
+  const A1 = { studentId: '10101', password: 'sky-PW-1234' };
+  assert.strictEqual(pcall(deps, { action: 'submit', html: PAGE, studentId: '10101', password: 'wrongPW-000' }).code, 'WRONG_PASSWORD');
+  const r1 = pcall(deps, { action: 'submit', session: sa, html: '<!-- vibe-submit:99999|x -->\n' + PAGE, requestId: 'r-1' });
+  assert.strictEqual(r1.ok, true, JSON.stringify(r1));
+  assert.strictEqual(r1.version, 1);
+  const dup = pcall(deps, Object.assign({ action: 'submit', html: PAGE, requestId: 'r-1' }, A1));
+  assert.strictEqual(dup.duplicate, true);
+  assert.strictEqual(dup.version, 1);
+  const rb = pcall(deps, { action: 'submit', studentId: '10102', password: 'sea-PW-5678', html: PAGE, requestId: 'r-1' });
+  assert.ok(rb.ok && !rb.duplicate && rb.studentId === '10102', JSON.stringify(rb));
+  const r2 = pcall(deps, Object.assign({ action: 'submit', html: PAGE }, A1));
+  assert.strictEqual(r2.version, 2);
+  assert.strictEqual(st.files.size, 3);
+  for (const s of st.subs) assert.strictEqual(s.email, '');
+  const f1 = [...st.files.entries()].find(([k]) => k.startsWith('10101_v1_'))[1];
+  assert.ok(f1.text.startsWith('<!-- vibe-submit:10101|김하늘 -->\n'), f1.text.slice(0, 50));
+  assert.ok(!f1.text.includes('99999'));
+  const l = pcall(deps, { action: 'list_mine', session: sa });
+  assert.strictEqual(l.studentId, '10101');
+  eq(l.items.map((i) => i.version), [1, 2]);
+  eq(pcall(deps, Object.assign({ action: 'list_mine' }, A1)).items.length, 2);
+  st.cfg.session_open = false;
+  assert.strictEqual(pcall(deps, { action: 'submit', session: sa, html: PAGE }).code, 'SESSION_CLOSED');
+  assert.strictEqual(pcall(deps, { action: 'submit', studentId: '10101', password: 'wrongPW-000', html: PAGE }).code, 'SESSION_CLOSED', '인증 전에 확인');
+  assert.strictEqual(st.locks, st.releases);
+});
+
+test('비밀번호 방식 빈도 제한은 학번 기준', () => {
+  const keys = [];
+  const { deps, st } = pwDeps({ rateLimit: (k) => { keys.push(k); return false; } });
+  const s = pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' }).session;
+  assert.strictEqual(pcall(deps, { action: 'submit', studentId: '10101', password: 'sky-PW-1234', html: PAGE }).code, 'BUSY');
+  assert.strictEqual(pcall(deps, { action: 'submit', session: s, html: PAGE }).code, 'BUSY');
+  eq(keys, ['id:10101', 'id:10101']);
+  assert.strictEqual(st.files.size, 0);
+});
+
+test('인증 방식에 맞지 않는 동작은 BAD_REQUEST', () => {
+  const p = pwDeps().deps;
+  for (const action of ['whoami', 'bind']) {
+    assert.strictEqual(pcall(p, { action, idToken: A, studentId: '10101', name: '김하늘' }).code, 'BAD_REQUEST', action);
+  }
+  assert.strictEqual(pcall(p, { action: 'submit', idToken: A, html: PAGE }).code, 'BAD_REQUEST', '비밀번호 방식 submit 에 토큰만');
+  const g = makeDeps().deps; // google
+  for (const action of ['register', 'login', 'change_password']) {
+    assert.strictEqual(pcall(g, { action, studentId: '10101', name: '김하늘', password: 'sky-PW-1234', newPassword: 'new-PW-9999' }).code, 'BAD_REQUEST', action);
+  }
+  assert.strictEqual(pcall(p, { action: 'ping' }).ok, true);
+});
+
+test('비밀번호·페퍼·솔트는 어떤 응답·로그에도 없음', () => {
+  assert.ok(PW_RESP.length > 60, String(PW_RESP.length));
+  const { deps, st } = pwDeps({ readAccounts: () => { throw new Error('boom'); } });
+  pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' });
+  const all = PW_RESP.map((r) => JSON.stringify(r)).concat(st.logs);
+  for (const s of all) for (const pw of PW_ALL) assert.ok(!s.includes(pw), '노출: ' + pw + ' in ' + s);
+  assert.ok(!/salt\d/.test(all.join('')), '솔트 노출');
+});
+
+test('Code.gs: onEdit·setup 페퍼 보호·세션 키는 해시', () => {
+  assert.ok(/function onEdit\(e\)/.test(SRC));
+  assert.ok(/'sess:' \+ sha256HexReal_\(token\)/.test(SRC), '세션 캐시 키는 토큰 해시');
+  assert.ok(/getLastRow\(\) >= 2\)\s*\{\s*throw new Error/.test(SRC), '계정이 있으면 새 페퍼를 만들지 않음');
+  assert.ok(/tryLock\(3000\)/.test(SRC), '시도 예약 짧은 잠금');
+});
+
 // ═════════ 정적 검사 ═════════
 
 test('Code.gs: HtmlService·eval·new Function 없음', () => {
@@ -695,7 +1032,7 @@ test('Code.gs: Logger/console 호출에 토큰 없음', () => {
   const lines = SRC.split('\n');
   const bad = [];
   lines.forEach((l, i) => {
-    if (/\b(Logger\.log|console\.\w+|deps\.log)\s*\(/.test(l) && /token|idToken|req\b|body\b|html/i.test(l)) bad.push((i + 1) + ': ' + l.trim());
+    if (/\b(Logger\.log|console\.\w+|deps\.log)\s*\(/.test(l) && /token|idToken|req\b|body\b|html|password|pepper/i.test(l)) bad.push((i + 1) + ': ' + l.trim());
   });
   assert.deepStrictEqual(bad, []);
 });
@@ -703,14 +1040,17 @@ test('Code.gs: Logger/console 호출에 토큰 없음', () => {
 const LAB = fs.readFileSync(LAB_PATH, 'utf8');
 
 test('lab/index.html: 브라우저 저장소·쿠키 사용 없음', () => {
-  assert.ok(!/\blocalStorage\b/.test(LAB), 'localStorage');
-  assert.ok(!/\bsessionStorage\b/.test(LAB), 'sessionStorage');
-  assert.ok(!/document\s*\.\s*cookie/.test(LAB), 'document.cookie');
+  // 설명 주석(// ..., <!-- ... -->, /* ... */)에서 이름만 언급하는 것은 허용
+  const code = LAB.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1');
+  assert.ok(!/\blocalStorage\b/.test(code), 'localStorage');
+  assert.ok(!/\bsessionStorage\b/.test(code), 'sessionStorage');
+  assert.ok(!/document\s*\.\s*cookie/.test(code), 'document.cookie');
 });
 
 test('lab/index.html: 외부 스크립트는 GIS 하나뿐', () => {
   const srcs = [...LAB.matchAll(/<script\b[^>]*\bsrc\s*=\s*["']?([^"'\s>]+)/gi)].map((m) => m[1]);
-  assert.deepStrictEqual(srcs, ['https://accounts.google.com/gsi/client']);
+  // 비밀번호 방식으로 바뀌며 GIS 를 뺄 수도 있음: 외부 스크립트는 없거나 GIS 하나
+  assert.ok(srcs.length <= 1 && srcs.every((x) => x === 'https://accounts.google.com/gsi/client'), srcs.join(','));
 });
 
 test('lab/index.html: CONFIG 형식(자리표시자 또는 실제 값), 비밀 값 없음', () => {

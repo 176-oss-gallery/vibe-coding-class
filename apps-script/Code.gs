@@ -1,7 +1,8 @@
 /**
  * 바이브 코딩 수업: 학생 HTML 게임 제출 웹 앱 (프로토타입, Apps Script V8)
  * 배포: 실행 계정 = 나(교사), 액세스 = 모든 사용자. 스프레드시트에 바인딩된 스크립트.
- * 처음 한 번: 스크립트 속성 GOOGLE_CLIENT_ID 설정 후 setup() 실행.
+ * 처음 한 번: setup() 실행 (Accounts 탭·PASSWORD_PEPPER 생성). auth_mode=google 이면 GOOGLE_CLIENT_ID 도 설정.
+ * 인증 방식(Config auth_mode): password(기본, 학번+학생이 정한 비밀번호) | google(구글 로그인 토큰)
  *
  * ── deps 인터페이스 (handleRequest(body, deps) 에 주입; 테스트에서는 가짜로 대체) ──
  *   now()                      → Date (서버 현재 시각)
@@ -19,7 +20,20 @@
  *   sha256Hex(text)            → UTF-8 기준 SHA-256 전체 16진 문자열(소문자 64자)
  *   tryLock()                  → boolean (20초 대기)
  *   releaseLock()              → void
- *   log(msg)                   → void (토큰·HTML·요청 본문은 절대 넘기지 않음)
+ *   log(msg)                   → void (토큰·비밀번호·HTML·요청 본문은 절대 넘기지 않음)
+ *   ── 비밀번호 방식 ──
+ *   readAccounts()             → [{ id, name, hash, salt, reset:boolean, resetAt:Date|string|'', row }]
+ *   appendAccount(row)         → void; row = { id, name, hash, salt, at:Date }
+ *   updateAccountPassword(id, { hash, salt, at }) → boolean (행 없으면 false). 초기화·초기화시각 칸을 비움
+ *   getPepper()                → string | null (스크립트 속성 PASSWORD_PEPPER)
+ *   newSalt()                  → 무작위 문자열
+ *   reserveAttempt(id)         → { ok:true } | { ok:false, busy? } (시도 횟수를 먼저 1 올림. 이미 LOCK_AFTER 이상이면 ok:false → LOCKED, busy → BUSY)
+ *   clearFails(id)             → void (성공 시 시도 횟수 초기화)
+ *   globalFails() → number, addGlobalFail() → void (1분 단위 전체 오답 수)
+ *   newSession(id)             → 세션 토큰 문자열 (6시간)
+ *   resolveSession(token)      → { id, issuedAt:ms } | null (만료·버전 불일치면 null)
+ *   bumpSessionVersion(id)     → void (그 학번의 기존 세션 모두 무효)
+ *   비밀번호 방식에서 rateLimit 의 첫 인자는 'id:' + 학번
  */
 
 // ───────── 상수 ─────────
@@ -27,6 +41,20 @@ var VERSION = 'lab-1';
 var FOLDER_NAME = 'vibe-test-submissions';
 var PROP_FOLDER_ID = 'SUBMIT_FOLDER_ID';
 var PROP_CLIENT_ID = 'GOOGLE_CLIENT_ID';
+var PROP_PEPPER = 'PASSWORD_PEPPER';
+var ITERATIONS = 300;   // 비밀번호 해시 반복 횟수
+var LOCK_AFTER = 5;     // 이 횟수만큼 틀리면 잠금
+var LOCK_SEC = 300;     // 잠금 유지 시간(초)
+var RESET_WINDOW_SEC = 600; // 선생님 초기화 후 학번으로 로그인할 수 있는 시간(초)
+var GLOBAL_FAIL_MAX = 40;   // 1분 동안 전체 오답이 이보다 많으면 BUSY
+var SESSION_TTL = 21600;    // 세션 유지(초)
+var WEAK_LIST = ['password', 'qwer', 'qwerty', 'asdf', '1q2w3e', '0000', '1111', '1234', '12345', '123456', 'abcd1234'];
+var PW_MIN = 4;
+var PW_MAX = 20;
+var PW_INPUT_MAX = 100; // 이보다 긴 입력은 형식 오류
+var GOOGLE_ACTIONS = ['whoami', 'bind'];
+var PASSWORD_ACTIONS = ['register', 'login', 'change_password'];
+var SHARED_ACTIONS = ['submit', 'list_mine'];
 var BODY_EXTRA = 64 * 1024;
 var BODY_HARD_MAX = 8 * 1024 * 1024; // 설정을 읽기 전 절대 상한
 var REQUEST_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
@@ -41,12 +69,14 @@ var SHEETS = {
   Roster: ['학번', '이름'],
   Bindings: ['학번', '이름', '이메일', '계정표시이름', '이름불일치', '연결시각', '계정종류'],
   Submissions: ['시각', '학번', '이메일', '버전', '드라이브파일ID', '크기', 'sha256', '요청ID'],
-  Config: ['키', '값']
+  Config: ['키', '값'],
+  Accounts: ['학번', '이름', '비밀번호해시', '솔트', '등록시각', '초기화', '변경시각', '초기화시각']
 };
 // 텍스트 서식 열 (1부터): 학번·파일ID·해시·요청ID (숫자/지수로 바뀌지 않게)
-var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8] };
+var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8], Accounts: [1, 3, 4] };
 
 var CONFIG_DEFAULTS = [
+  ['auth_mode', 'password'],   // password | google
   ['roster_required', 'TRUE'],
   ['allowed_domains', ''],
   ['allow_personal', 'FALSE'], // TRUE면 allowed_domains가 있어도 개인 구글 계정(gmail 등) 허용. 대신 이름이 명단과 같아야 연결됨
@@ -68,8 +98,18 @@ var MESSAGES = {
   NOT_HTML: 'HTML 코드가 아닌 것 같아요. 전체 코드를 붙여 넣어 주세요.',
   SESSION_CLOSED: '지금은 제출 시간이 아니에요.',
   BUSY: '제출이 몰려 있어요. 잠시 후 다시 시도해 주세요.',
-  SERVER_ERROR: '서버 오류가 발생했어요. 잠시 후 다시 시도해 주세요.'
+  SERVER_ERROR: '서버 오류가 발생했어요. 잠시 후 다시 시도해 주세요.',
+  NOT_REGISTERED: '아직 등록하지 않은 학번이에요. 먼저 등록해 주세요.',
+  ALREADY_REGISTERED: '이미 등록된 학번이에요. 본인이 등록한 게 아니면 선생님께 알려 주세요.',
+  WRONG_PASSWORD: '비밀번호가 맞지 않아요.',
+  LOCKED: '비밀번호를 여러 번 틀렸어요. 10분 뒤에 다시 하거나 선생님께 초기화를 부탁하세요.',
+  WEAK_PASSWORD: '비밀번호는 4~20자로 정해 주세요. 같은 글자 반복, 1234·abcd 같은 순서, 학번·이름이 들어간 것은 쓸 수 없어요.',
+  MUST_CHANGE_PASSWORD: '새 비밀번호를 먼저 정해 주세요.',
+  SESSION_EXPIRED: '로그인이 끝났어요. 다시 로그인해 주세요.'
 };
+var MSG_NAME_NOT_ROSTER = '이름이 명단과 달라요. 이름을 정확히 입력해 주세요.';
+var MSG_ROSTER_NO_NAME = '명단에 이름이 비어 있어 등록할 수 없어요. 선생님께 알려 주세요.';
+var MSG_NO_PEPPER = '서버 설정이 끝나지 않았어요. 선생님: setup() 을 실행해 주세요.';
 var MSG_RATE_LIMITED = '너무 자주 제출했어요. 1분 뒤에 다시 시도해 주세요.'; // 코드는 BUSY
 var MSG_NO_CLIENT_ID ='서버 설정이 끝나지 않았어요. 선생님: 스크립트 속성 GOOGLE_CLIENT_ID 를 설정해 주세요.';
 
@@ -209,7 +249,7 @@ function parseBool_(v, def) {
 }
 
 function parseConfig(rows) {
-  var cfg = { roster_required: true, allowed_domains: [], max_html_bytes: 2097152, session_open: true, submit_per_minute: RATE_MAX, allow_personal: false };
+  var cfg = { roster_required: true, allowed_domains: [], max_html_bytes: 2097152, session_open: true, submit_per_minute: RATE_MAX, allow_personal: false, auth_mode: 'password' };
   if (!rows || !rows.length) return cfg;
   for (var i = 1; i < rows.length; i++) {
     var r = rows[i] || [];
@@ -218,6 +258,7 @@ function parseConfig(rows) {
     if (key === 'roster_required') cfg.roster_required = parseBool_(val, true);
     else if (key === 'session_open') cfg.session_open = parseBool_(val, true);
     else if (key === 'allow_personal') cfg.allow_personal = parseBool_(val, false);
+    else if (key === 'auth_mode') cfg.auth_mode = String(val === null || val === undefined ? '' : val).trim().toLowerCase() === 'google' ? 'google' : 'password';
     else if (key === 'allowed_domains') {
       cfg.allowed_domains = String(val === null || val === undefined ? '' : val)
         .split(/[\s,;]+/).map(function (d) { return d.trim().toLowerCase().replace(/^@/, ''); })
@@ -270,6 +311,67 @@ function normName_(s) {
 function namesMatch(a, b) {
   var x = normName_(a), y = normName_(b);
   return !!x && x === y;
+}
+
+// 비밀번호 해시: h = 비밀번호, h = sha256(h + 솔트 + 페퍼) 를 iterations 번 반복
+function hashPassword(password, salt, pepper, sha256HexFn, iterations) {
+  var n = iterations > 0 ? Math.floor(iterations) : ITERATIONS;
+  var h = String(password);
+  for (var i = 0; i < n; i++) h = String(sha256HexFn(h + String(salt) + String(pepper)));
+  return h;
+}
+
+// 길이와 무관하게 끝까지 비교 (시간 차이로 내용이 드러나지 않게)
+function safeEqual(a, b) {
+  var x = String(a === null || a === undefined ? '' : a), y = String(b === null || b === undefined ? '' : b);
+  var diff = x.length ^ y.length;
+  var len = Math.max(x.length, y.length);
+  for (var i = 0; i < len; i++) diff |= (x.charCodeAt(i % (x.length || 1)) || 0) ^ (y.charCodeAt(i % (y.length || 1)) || 0);
+  return diff === 0;
+}
+
+// 비밀번호 규칙: 4~20자, 제어문자 없음, 너무 쉬운 것·학번 포함·이름과 같음 거부
+function validatePassword(pw, studentId, name) {
+  if (typeof pw !== 'string') return 'WEAK_PASSWORD';
+  if (pw.length < PW_MIN || pw.length > PW_MAX) return 'WEAK_PASSWORD';
+  if (/[\u0000-\u001f\u007f\u2028\u2029]/.test(pw)) return 'WEAK_PASSWORD';
+  var low = pw.toLowerCase();
+  if (/^([\s\S])\1*$/.test(pw)) return 'WEAK_PASSWORD';
+  if (isSequence_(low)) return 'WEAK_PASSWORD';
+  if (WEAK_LIST.indexOf(low) >= 0) return 'WEAK_PASSWORD';
+  var sid = String(studentId === null || studentId === undefined ? '' : studentId).trim();
+  if (sid && pw.indexOf(sid) >= 0) return 'WEAK_PASSWORD';
+  if (name !== undefined && name !== null && normName_(name) && normName_(name) === normName_(pw)) return 'WEAK_PASSWORD';
+  return null;
+}
+
+// 문자열 전체가 1씩 오르거나 내리는 숫자·영문 연속인지 (1234, 4321, abcd)
+function isSequence_(low) {
+  if (!/^(\d+|[a-z]+)$/.test(low) || low.length < 2) return false;
+  var step = low.charCodeAt(1) - low.charCodeAt(0);
+  if (step !== 1 && step !== -1) return false;
+  for (var i = 2; i < low.length; i++) if (low.charCodeAt(i) - low.charCodeAt(i - 1) !== step) return false;
+  return true;
+}
+
+function toMs_(v) {
+  if (isDate_(v)) return v.getTime();
+  if (typeof v === 'number') return v;
+  if (v === null || v === undefined || v === '') return NaN;
+  return Date.parse(String(v));
+}
+
+// 선생님 초기화가 유효한지: 초기화=Y 이고 초기화시각이 RESET_WINDOW_SEC 이내
+function resetActive(row, nowMs) {
+  if (!row || !row.reset) return false;
+  var t = toMs_(row.resetAt);
+  if (!isFinite(t)) return false;
+  var d = Number(nowMs) - t;
+  return d >= -60000 && d <= RESET_WINDOW_SEC * 1000;
+}
+
+function isLocked(n) {
+  return Number(n) >= LOCK_AFTER;
 }
 
 function nextVersion(submissionRows, studentId) {
@@ -331,13 +433,20 @@ function route_(body, deps) {
 
   // ping 은 시트를 읽지 않음
   if (action === 'ping') return ok_({ serverTime: deps.now().toISOString(), version: VERSION });
-  if (['whoami', 'bind', 'submit', 'list_mine'].indexOf(action) < 0) return fail_('BAD_REQUEST');
+  var known = GOOGLE_ACTIONS.concat(PASSWORD_ACTIONS, SHARED_ACTIONS);
+  if (typeof action !== 'string' || known.indexOf(action) < 0) return fail_('BAD_REQUEST');
 
   var cfg = deps.readConfig();
   if (utf8Length(body) > cfg.max_html_bytes + BODY_EXTRA) return fail_('BAD_REQUEST');
+  var pwMode = cfg.auth_mode !== 'google';
+  // 현재 인증 방식에 맞지 않는 동작은 거부
+  if (pwMode && GOOGLE_ACTIONS.indexOf(action) >= 0) return fail_('BAD_REQUEST');
+  if (!pwMode && PASSWORD_ACTIONS.indexOf(action) >= 0) return fail_('BAD_REQUEST');
 
   // 무거운 작업 전에 제출 시간 확인
   if (action === 'submit' && !cfg.session_open) return fail_('SESSION_CLOSED');
+
+  if (pwMode) return routePassword_(deps, cfg, req, action);
 
   var auth = deps.verifyToken(req.idToken, cfg);
   if (!auth || !auth.ok) {
@@ -349,7 +458,135 @@ function route_(body, deps) {
   if (action === 'whoami') return doWhoami_(deps, auth, email);
   if (action === 'list_mine') return doListMine_(deps, email);
   if (action === 'bind') return doBind_(deps, cfg, req, auth, email);
-  return doSubmit_(deps, cfg, req, email);
+  return doSubmit_(deps, cfg, req, { email: email });
+}
+
+// ───────── 비밀번호 방식 ─────────
+
+function readStudentId_(req) {
+  var raw = req.studentId;
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+  var sid = String(raw).trim();
+  return validateStudentId(sid) ? sid : null;
+}
+
+function isPwInput_(v) {
+  return typeof v === 'string' && v.length <= PW_INPUT_MAX;
+}
+
+function findAccount_(accounts, sid) {
+  for (var i = 0; i < accounts.length; i++) if (String(accounts[i].id).trim() === sid) return accounts[i];
+  return null;
+}
+
+// 학번+비밀번호 확인 → { acc, mustChange } 또는 { fail: 응답 }
+function authPassword_(deps, sid, password, pepper) {
+  var acc = findAccount_(deps.readAccounts() || [], sid);
+  if (!acc) return { fail: fail_('NOT_REGISTERED') };
+  if (Number(deps.globalFails()) > GLOBAL_FAIL_MAX) return { fail: fail_('BUSY') };
+  var rsv = deps.reserveAttempt(sid); // 해시 전에 시도 횟수를 먼저 올림 (동시 요청 경쟁 방지)
+  if (!rsv || !rsv.ok) return { fail: fail_(rsv && rsv.busy ? 'BUSY' : 'LOCKED') };
+  var active = resetActive(acc, deps.now().getTime());
+  var good = safeEqual(hashPassword(password, acc.salt, pepper, deps.sha256Hex, ITERATIONS), acc.hash);
+  // 선생님 초기화 10분 안에는 학번(임시 비밀번호)도 허용, 어느 쪽이든 변경 필수
+  if (!good && active) good = safeEqual(password, sid);
+  if (!good) {
+    deps.addGlobalFail();
+    return { fail: fail_('WRONG_PASSWORD') };
+  }
+  deps.clearFails(sid);
+  return { acc: acc, mustChange: active };
+}
+
+// 세션 토큰 → { acc } 또는 { fail }
+function authSession_(deps, token) {
+  if (typeof token !== 'string' || token.length > 200) return { fail: fail_('BAD_REQUEST') };
+  var sess = /^[A-Za-z0-9]{16,200}$/.test(token) ? deps.resolveSession(token) : null;
+  if (!sess || !sess.id) return { fail: fail_('SESSION_EXPIRED') };
+  var acc = findAccount_(deps.readAccounts() || [], String(sess.id));
+  if (!acc) return { fail: fail_('SESSION_EXPIRED') };
+  // 세션 발급 뒤 선생님이 초기화했으면 무효
+  var rAt = toMs_(acc.resetAt);
+  if (acc.reset && isFinite(rAt) && rAt >= Number(sess.issuedAt || 0)) return { fail: fail_('SESSION_EXPIRED') };
+  return { acc: acc };
+}
+
+function routePassword_(deps, cfg, req, action) {
+  var acc;
+  // submit·list_mine 은 세션 우선
+  if (SHARED_ACTIONS.indexOf(action) >= 0 && req.session !== undefined && req.session !== null) {
+    var sa = authSession_(deps, req.session);
+    if (sa.fail) return sa.fail;
+    acc = sa.acc;
+    var sidS = String(acc.id).trim();
+    if (action === 'list_mine') return listFor_(deps, sidS);
+    return doSubmit_(deps, cfg, req, { sid: sidS, name: String(acc.name) });
+  }
+
+  var sid = readStudentId_(req);
+  if (!sid) return fail_('BAD_REQUEST');
+  if (!isPwInput_(req.password)) return fail_('BAD_REQUEST');
+  var pepper = deps.getPepper();
+  if (!pepper) return fail_('SERVER_ERROR', MSG_NO_PEPPER);
+
+  if (action === 'register') return doRegister_(deps, cfg, req, sid, pepper);
+  if (action === 'change_password' && !isPwInput_(req.newPassword)) return fail_('BAD_REQUEST');
+
+  var a = authPassword_(deps, sid, req.password, pepper);
+  if (a.fail) return a.fail;
+  var name = String(a.acc.name);
+
+  if (action === 'login') {
+    // 변경이 필요한 동안에는 세션을 주지 않음 (change_password 후 발급)
+    return ok_({ studentId: sid, name: name, mustChange: a.mustChange, session: a.mustChange ? null : deps.newSession(sid) });
+  }
+  if (action === 'change_password') return doChangePassword_(deps, req, sid, name, pepper);
+  if (a.mustChange) return fail_('MUST_CHANGE_PASSWORD');
+  if (action === 'list_mine') return listFor_(deps, sid);
+  return doSubmit_(deps, cfg, req, { sid: sid, name: name });
+}
+
+function doRegister_(deps, cfg, req, sid, pepper) {
+  if (typeof req.name !== 'string') return fail_('BAD_REQUEST');
+  var name = sanitizeName(req.name);
+  if (!name || name.length > NAME_MAX) return fail_('BAD_REQUEST');
+  if (validatePassword(req.password, sid, name)) return fail_('WEAK_PASSWORD');
+  // 해시는 전역 잠금 밖에서 계산
+  var salt = String(deps.newSalt());
+  var hash = hashPassword(req.password, salt, pepper, deps.sha256Hex, ITERATIONS);
+
+  if (!deps.tryLock()) return fail_('BUSY');
+  try {
+    var roster = deps.readRoster() || {};
+    var inRoster = Object.prototype.hasOwnProperty.call(roster, sid);
+    if (cfg.roster_required && !inRoster) return fail_('NOT_IN_ROSTER');
+    var rosterName = inRoster ? String(roster[sid] || '') : '';
+    // 명단에 이름이 비어 있으면 아무 이름으로나 등록될 수 있으므로 거부 (선생님이 이름을 채워야 함)
+    if (cfg.roster_required && !normName_(rosterName)) return fail_('NOT_IN_ROSTER', MSG_ROSTER_NO_NAME);
+    // 비밀번호 방식은 신원 보증이 없으므로 명단 이름과 다르면 항상 거부
+    if (normName_(rosterName) && normName_(rosterName) !== normName_(name)) return fail_('NAME_MISMATCH', MSG_NAME_NOT_ROSTER);
+    if (findAccount_(deps.readAccounts() || [], sid)) return fail_('ALREADY_REGISTERED');
+    deps.appendAccount({ id: sid, name: name, hash: hash, salt: salt, at: deps.now() });
+  } finally {
+    deps.releaseLock();
+  }
+  return ok_({ studentId: sid, name: name, session: deps.newSession(sid) });
+}
+
+function doChangePassword_(deps, req, sid, name, pepper) {
+  var np = req.newPassword;
+  if (validatePassword(np, sid, name) || np === req.password) return fail_('WEAK_PASSWORD');
+  // 해시는 전역 잠금 밖에서 계산
+  var salt = String(deps.newSalt());
+  var hash = hashPassword(np, salt, pepper, deps.sha256Hex, ITERATIONS);
+  if (!deps.tryLock()) return fail_('BUSY');
+  try {
+    if (!deps.updateAccountPassword(sid, { hash: hash, salt: salt, at: deps.now() })) return fail_('NOT_REGISTERED');
+  } finally {
+    deps.releaseLock();
+  }
+  deps.bumpSessionVersion(sid); // 예전 세션 모두 무효
+  return ok_({ studentId: sid, session: deps.newSession(sid) });
 }
 
 function doWhoami_(deps, auth, email) {
@@ -366,7 +603,10 @@ function doWhoami_(deps, auth, email) {
 function doListMine_(deps, email) {
   var b = findBindingByEmail_(deps.readBindings(), email);
   if (!b) return fail_('NOT_BOUND');
-  var sid = String(b.id).trim();
+  return listFor_(deps, String(b.id).trim());
+}
+
+function listFor_(deps, sid) {
   var items = deps.readSubmissions()
     .filter(function (r) { return String(r.id).trim() === sid; })
     .map(function (r) {
@@ -415,7 +655,10 @@ function doBind_(deps, cfg, req, auth, email) {
   }
 }
 
-function doSubmit_(deps, cfg, req, email) {
+// who = { email } (구글 방식: 연결된 학번을 잠금 안에서 찾음) | { sid, name } (비밀번호 방식)
+function doSubmit_(deps, cfg, req, who) {
+  var pwMode = !!who.sid;
+  var email = pwMode ? '' : who.email;
   var html = req.html;
   var requestId = null;
   if (req.requestId !== undefined && req.requestId !== null) {
@@ -428,25 +671,33 @@ function doSubmit_(deps, cfg, req, email) {
   // 표식을 지운 뒤 남은 내용도 HTML 이어야 함
   bad = checkHtml(bodyHtml.replace(/^\s*(<!--\s*vibe-info:[^>]*?-->\s*)+/, ''), cfg.max_html_bytes);
   if (bad) return fail_(bad);
-  if (!deps.rateLimit(email, cfg.submit_per_minute)) return fail_('BUSY', MSG_RATE_LIMITED);
+  if (!deps.rateLimit(pwMode ? 'id:' + who.sid : email, cfg.submit_per_minute)) return fail_('BUSY', MSG_RATE_LIMITED);
 
   if (!deps.tryLock()) return fail_('BUSY');
   try {
-    var b = findBindingByEmail_(deps.readBindings(), email);
-    if (!b) return fail_('NOT_BOUND');
-    var sid = String(b.id).trim();
+    var sid, markName;
+    if (pwMode) {
+      sid = who.sid;
+      markName = who.name;
+    } else {
+      var b = findBindingByEmail_(deps.readBindings(), email);
+      if (!b) return fail_('NOT_BOUND');
+      sid = String(b.id).trim();
+      markName = b.name;
+    }
     var subs = deps.readSubmissions();
-    // 같은 이메일 + requestId 재전송이면 기존 결과를 그대로 돌려줌 (파일 새로 만들지 않음)
+    // 같은 (이메일 | 비밀번호 방식은 학번) + requestId 재전송이면 기존 결과를 그대로 돌려줌 (파일 새로 만들지 않음)
     if (requestId) {
       for (var i = 0; i < subs.length; i++) {
         var s = subs[i];
-        if (String(s.requestId || '') === requestId && String(s.email).trim().toLowerCase() === email) {
+        var same = pwMode ? String(s.id).trim() === sid : String(s.email).trim().toLowerCase() === email;
+        if (String(s.requestId || '') === requestId && same) {
           return ok_({ studentId: String(s.id).trim(), version: Number(s.version), size: Number(s.size),
             sha256: String(s.sha256 || '').slice(0, 12), submittedAt: toIso_(s.at), duplicate: true });
         }
       }
     }
-    var content = buildMarker(sid, b.name) + bodyHtml;
+    var content = buildMarker(sid, markName) + bodyHtml;
     // size, sha256 은 서버 표식이 포함된 최종 파일 내용 기준 (sha256 은 앞 12자리)
     var size = utf8Length(content);
     var hash = String(deps.sha256Hex(content)).slice(0, 12);
@@ -544,8 +795,97 @@ function makeRealDeps() {
       try { SpreadsheetApp.flush(); } catch (e) { /* 무시 */ }
       try { lock.releaseLock(); } catch (e) { /* 무시 */ }
     },
-    log: function (msg) { console.error(String(msg)); }
+    log: function (msg) { console.error(String(msg)); },
+    readAccounts: function () {
+      return dataRows_('Accounts').map(function (r, i) {
+        return { id: String(r[0]).trim(), name: String(r[1]), hash: String(r[2]).trim(), salt: String(r[3]).trim(),
+          reset: String(r[5]).trim().toUpperCase() === 'Y', resetAt: r[7], row: i + 2 };
+      }).filter(function (a) { return a.id; });
+    },
+    appendAccount: function (a) {
+      appendRow_('Accounts', [a.id, textCell_(a.name), a.hash, a.salt, a.at, '', '', '']);
+    },
+    updateAccountPassword: function (id, p) {
+      var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Accounts');
+      if (!sh || sh.getLastRow() < 2) return false;
+      var ids = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+      for (var i = 0; i < ids.length; i++) {
+        if (String(ids[i][0]).trim() !== String(id)) continue;
+        var r = i + 2;
+        sh.getRange(r, 3, 1, 2).setNumberFormat('@').setValues([[p.hash, p.salt]]);
+        sh.getRange(r, 6, 1, 3).setValues([['', p.at, '']]); // 초기화 비움, 변경시각, 초기화시각 비움
+        return true;
+      }
+      return false;
+    },
+    getPepper: function () {
+      return PropertiesService.getScriptProperties().getProperty(PROP_PEPPER);
+    },
+    newSalt: function () { return Utilities.getUuid().replace(/-/g, ''); },
+    reserveAttempt: realReserveAttempt_,
+    clearFails: function (id) { CacheService.getScriptCache().remove('pf:' + id); },
+    globalFails: function () { return Number(CacheService.getScriptCache().get(globalFailKey_())) || 0; },
+    addGlobalFail: function () {
+      var c = CacheService.getScriptCache(), k = globalFailKey_();
+      c.put(k, String((Number(c.get(k)) || 0) + 1), 120);
+    },
+    newSession: function (id) {
+      var c = CacheService.getScriptCache();
+      var token = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+      var v = Number(c.get('sv:' + id)) || 0;
+      c.put('sess:' + sha256HexReal_(token), JSON.stringify({ id: id, v: v, iat: Date.now() }), SESSION_TTL);
+      return token;
+    },
+    resolveSession: function (token) {
+      var c = CacheService.getScriptCache();
+      var raw = c.get('sess:' + sha256HexReal_(token));
+      if (!raw) return null;
+      var s;
+      try { s = JSON.parse(raw); } catch (e) { return null; }
+      if (!s || !s.id || (Number(c.get('sv:' + s.id)) || 0) !== Number(s.v)) return null;
+      return { id: String(s.id), issuedAt: Number(s.iat) || 0 };
+    },
+    bumpSessionVersion: function (id) {
+      var c = CacheService.getScriptCache();
+      c.put('sv:' + id, String((Number(c.get('sv:' + id)) || 0) + 1), SESSION_TTL);
+    }
   };
+}
+
+function globalFailKey_() {
+  return 'pfall:' + Math.floor(Date.now() / 60000);
+}
+
+// 시도 횟수를 짧은 잠금 안에서 읽고 올림 (동시 요청이 잠금 한도를 넘지 못하게)
+function realReserveAttempt_(id) {
+  var lk = LockService.getScriptLock();
+  if (!lk.tryLock(3000)) return { ok: false, busy: true };
+  try {
+    var c = CacheService.getScriptCache();
+    var n = Number(c.get('pf:' + id)) || 0;
+    if (isLocked(n)) return { ok: false };
+    c.put('pf:' + id, String(n + 1), LOCK_SEC);
+    return { ok: true };
+  } finally {
+    lk.releaseLock();
+  }
+}
+
+// 단순 트리거: 선생님이 Accounts 의 초기화 칸에 Y 를 쓰면 초기화시각 기록, 지우면 시각도 지움
+function onEdit(e) {
+  try {
+    var rng = e && e.range;
+    if (!rng) return;
+    var sh = rng.getSheet();
+    if (sh.getName() !== 'Accounts') return;
+    var resetCol = 6, atCol = 8;
+    if (rng.getColumn() > resetCol || rng.getLastColumn() < resetCol) return;
+    var first = Math.max(2, rng.getRow()), last = rng.getLastRow();
+    for (var r = first; r <= last; r++) {
+      var v = String(sh.getRange(r, resetCol).getValue()).trim().toUpperCase();
+      sh.getRange(r, atCol).setValue(v === 'Y' ? new Date() : '');
+    }
+  } catch (err) { /* 트리거 오류는 무시 */ }
 }
 
 function sha256HexReal_(text) {
@@ -705,7 +1045,17 @@ function setup() {
     if (!have[kv[0]]) cfgSheet.appendRow(kv);
   });
   getSubmitFolder_();
-  if (!PropertiesService.getScriptProperties().getProperty(PROP_CLIENT_ID)) {
-    console.warn('스크립트 속성 GOOGLE_CLIENT_ID 를 설정해야 로그인이 동작합니다.');
+  var props = PropertiesService.getScriptProperties();
+  // 비밀번호 해시용 페퍼: 없을 때만 만듦 (값은 기록·출력하지 않음)
+  if (!props.getProperty(PROP_PEPPER)) {
+    var acc = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Accounts');
+    if (acc && acc.getLastRow() >= 2) {
+      throw new Error('PASSWORD_PEPPER 가 없는데 Accounts 에 이미 계정이 있어요. 새로 만들면 기존 비밀번호가 모두 맞지 않게 됩니다. ' +
+        '원래 값을 스크립트 속성에 되돌리거나, Accounts 의 계정 행을 모두 지운 뒤 다시 실행하세요.');
+    }
+    props.setProperty(PROP_PEPPER, (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, ''));
+  }
+  if (!props.getProperty(PROP_CLIENT_ID)) {
+    console.warn('auth_mode=google 로 쓸 때는 스크립트 속성 GOOGLE_CLIENT_ID 를 설정해야 합니다.');
   }
 }
