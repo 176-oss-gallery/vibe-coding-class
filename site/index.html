@@ -82,10 +82,12 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
 <header>
   <h1>🧪 바이브코딩 과학 수업 도구</h1>
   <div class="who">
-    <input type="text" id="sid" data-k="sid" placeholder="학번" inputmode="numeric" maxlength="5" autocomplete="off" aria-label="학번 5자리 (예: 20315)" title="학번 5자리 (예: 20315)">
-    <input type="text" id="sname" data-k="sname" placeholder="이름" autocomplete="off" aria-label="이름">
+    <input type="text" id="sid" data-k="sid" placeholder="학번" readonly tabindex="-1" aria-label="로그인한 학번">
+    <input type="text" id="sname" data-k="sname" placeholder="이름" readonly tabindex="-1" aria-label="로그인한 이름">
     <span id="idinfo"></span>
     <span id="pchip" class="chip no">서약 전</span>
+    <button class="btn p" id="loginbtn" type="button">🔑 로그인</button>
+    <button class="btn" id="logoutbtn" type="button" hidden>로그아웃</button>
   </div>
 </header>
 <nav id="nav">
@@ -102,7 +104,7 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
 <!-- ===== 1차시 ===== -->
 <section class="tab on" id="t1">
   <h2>1차시 · 서약 &amp; 기획</h2>
-  <p class="sub">위쪽에 <b>학번과 이름</b>을 먼저 입력하세요. 입력한 내용은 이 브라우저에 자동 저장됩니다. 끝나면 [제출용 요약 복사]를 눌러 구글 폼에 붙여넣으세요.</p>
+  <p class="sub">위쪽 <b>[로그인]</b>을 먼저 누르세요(처음이면 [처음 등록]). 입력한 내용은 이 브라우저에 자동 저장됩니다. 끝나면 [제출하기]를 누르세요. 고쳐서 다시 제출하면 마지막 제출이 쓰여요.</p>
 
   <div class="notice warn" id="signbox">
     <b>📜 제작 서약서에 서명해야 활동을 시작할 수 있어요.</b>
@@ -143,8 +145,9 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
   <div class="fld"><label>🤔 이 앱 때문에 불편하거나 기분 나쁠 사람이 있을까요? 있다면 어떻게 바꿀까요?</label><textarea data-k="harm" data-l="불편할 사람 점검"></textarea></div>
   <div class="fld"><label>예상되는 어려움 / 선생님께 묻고 싶은 것</label><textarea data-k="worry" data-l="어려움"></textarea></div>
   <div class="row">
-    <button class="btn p" onclick="copySum('t1','1차시 기획')">📋 제출용 요약 복사</button>
-    <a class="btn" data-link="FORM1_URL" target="_blank" rel="noopener">↗ 1차시 제출 폼 열기</a>
+    <button class="btn p" id="nb_t1" onclick="submitNote('t1','1차시 기획')">📤 제출하기</button>
+    <button class="btn" onclick="copySum('t1','1차시 기획')">📋 요약 복사(백업)</button>
+    <span class="sub" id="ns_t1" aria-live="polite"></span>
   </div>
   </div>
 </section>
@@ -152,7 +155,7 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
 <!-- ===== 2~3차시 ===== -->
 <section class="tab" id="t2">
   <h2>2~3차시 · 만들기 &amp; 수정</h2>
-  <div class="notice warn signbanner">먼저 <b>1차시에서 서약서에 서명</b>해야 제출용 요약과 게임 내보내기를 쓸 수 있어요.</div>
+  <div class="notice warn signbanner">먼저 <b>로그인하고 1차시에서 서약서에 서명</b>해야 제출과 게임 내보내기를 쓸 수 있어요.</div>
   <p class="sub">제미나이(Canvas)에서 작품을 만들고, 고치고, 이곳에는 기록을 남겨요.</p>
 
   <details open><summary>🛡 기본 안전 문구 — 제미나이 새 대화를 시작할 때 맨 앞에 붙여넣으세요</summary>
@@ -213,29 +216,42 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
   <div id="barlbl"></div>
   <ul id="gwarn"></ul>
   <div class="row">
-    <button class="btn p" id="gdl" onclick="dlGame()" disabled>⬇ 제출용 .html 내려받기</button>
+    <button class="btn p" id="gsub" onclick="submitGame()" disabled>📤 선생님께 제출하기</button>
+    <button class="btn" id="gdl" onclick="dlGame()" disabled>⬇ .html 내려받기(백업)</button>
     <button class="btn" onclick="$('gcode').value='';gcheck()">비우기</button>
   </div>
-  <p class="sub">내려받은 파일은 <b>3차시 제출 폼</b>의 파일 칸에 올리세요. 코드는 이 앱에 저장되지 않아요.</p>
+  <p class="sub" id="gstate" aria-live="polite">[선생님께 제출하기]를 누르면 바로 제출돼요. 고쳐서 다시 제출하면 마지막 제출이 쓰이고, 이전 제출도 기록으로 남아요. 코드는 이 앱에 저장되지 않아요.</p>
 
   <div class="row" style="margin-top:18px">
-    <button class="btn p" onclick="copySum('t2','2~3차시 제작')">📋 제출용 요약 복사</button>
-    <a class="btn" data-link="FORM2_URL" target="_blank" rel="noopener">↗ 2차시 제출 폼 열기</a>
-    <a class="btn" data-link="FORM3_URL" target="_blank" rel="noopener">↗ 3차시 제출 폼 열기 (게임 파일은 여기)</a>
+    <button class="btn p" id="nb_t2" onclick="submitNote('t2','2~3차시 제작')">📤 기록 제출하기</button>
+    <button class="btn" onclick="copySum('t2','2~3차시 제작')">📋 요약 복사(백업)</button>
+    <span class="sub" id="ns_t2" aria-live="polite"></span>
   </div>
 </section>
 
 <!-- ===== 4차시 ===== -->
 <section class="tab" id="t3">
   <h2>4차시 · 발표 &amp; 투표</h2>
-  <div class="notice warn signbanner">먼저 <b>1차시에서 서약서에 서명</b>해야 제출용 요약을 쓸 수 있어요.</div>
+  <div class="notice warn signbanner">먼저 <b>로그인하고 1차시에서 서약서에 서명</b>해야 제출과 투표를 할 수 있어요.</div>
   <p class="sub">우리 반 친구들의 작품을 플레이해 보고, 투표하고, 소감을 남겨요.</p>
   <div class="row">
-    <a class="btn p" data-link="FORM4_URL" target="_blank" rel="noopener">🗳 투표하러 가기 (4차시 폼)</a>
     <a class="btn" id="galbig" target="_blank" rel="noopener" hidden>↗ 우리 반 갤러리를 큰 화면으로 열기</a>
   </div>
-  <p class="sub">투표는 <b>우리 반<span id="votecls"></span></b> 작품에서만 해요. 아래 갤러리에서 작품을 플레이하고, 번호를 기억해 4차시 폼의 투표 칸에 입력하세요.</p>
+  <p class="sub">투표는 <b>우리 반<span id="votecls"></span></b> 작품에서만 해요. 아래 갤러리에서 작품을 플레이하고, 번호를 기억해 두세요.</p>
   <div class="galbox" id="galbox" hidden><iframe id="galframe" title="우리 반 갤러리" loading="lazy"></iframe></div>
+
+  <h3>🗳 투표</h3>
+  <p class="sub">부문마다 <b>작품 번호</b> 하나를 적으세요(1~99). <b>내 작품은 고르지 마세요.</b> 다시 제출하면 마지막 투표가 쓰여요.</p>
+  <div class="g2">
+    <div class="fld"><label for="v_sci">과학적으로 가장 정확한 작품 (번호)</label><input type="number" id="v_sci" min="1" max="99" inputmode="numeric"></div>
+    <div class="fld"><label for="v_fun">가장 재미있는 작품 (번호)</label><input type="number" id="v_fun" min="1" max="99" inputmode="numeric"></div>
+    <div class="fld"><label for="v_creative">가장 창의적인 작품 (번호)</label><input type="number" id="v_creative" min="1" max="99" inputmode="numeric"></div>
+    <div class="fld"><label for="v_practical">가장 실용적인 작품 (번호)</label><input type="number" id="v_practical" min="1" max="99" inputmode="numeric"></div>
+  </div>
+  <div class="row">
+    <button class="btn p" id="vbtn" onclick="submitVote()">🗳 투표 제출</button>
+    <span class="sub" id="vstate" aria-live="polite"></span>
+  </div>
 
   <h3>소감 &amp; 성찰</h3>
   <div class="fld"><label>가장 인상 깊은 작품과 이유</label><input type="text" data-k="r_best" data-l="인상 깊은 작품"></div>
@@ -243,8 +259,9 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
   <div class="fld"><label>AI에게 좋은 질문(프롬프트)을 하려면 어떻게 해야 할까?</label><textarea data-k="r_ai" data-l="AI 활용법"></textarea></div>
   <div class="fld"><label>AI가 틀렸거나 아쉬웠던 점, 앞으로 만들고 싶은 것</label><textarea data-k="r_more" data-l="아쉬운 점/다음 계획"></textarea></div>
   <div class="row">
-    <button class="btn p" onclick="copySum('t3','4차시 성찰')">📋 제출용 요약 복사</button>
-    <a class="btn" data-link="FORM4_URL" target="_blank" rel="noopener">↗ 4차시 폼 열기 (투표 + 소감 제출)</a>
+    <button class="btn p" id="nb_t3" onclick="submitNote('t3','4차시 성찰')">📤 소감 제출하기</button>
+    <button class="btn" onclick="copySum('t3','4차시 성찰')">📋 요약 복사(백업)</button>
+    <span class="sub" id="ns_t3" aria-live="polite"></span>
   </div>
 </section>
 </main>
@@ -267,16 +284,27 @@ details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px
   <textarea id="sumta" readonly></textarea>
   <div class="row"><span style="flex:1"></span><button class="btn p" onclick="$('sumov').classList.remove('on')">닫기</button></div>
 </div></div>
+
+<!-- 로그인·처음 등록 -->
+<div id="aov" class="ov"><div class="pm" style="border-color:var(--pri);max-width:480px" role="dialog" aria-modal="true" aria-labelledby="at">
+  <h2 id="at" style="font-size:22px">🔑 로그인</h2>
+  <div class="row" style="justify-content:center"><button class="btn p" type="button" id="amlogin">로그인</button><button class="btn" type="button" id="amreg">처음 등록</button></div>
+  <p class="sub" id="ahint" style="text-align:center"></p>
+  <div class="fld"><label for="aid">학번 (5자리)</label><input type="text" id="aid" inputmode="numeric" maxlength="5" autocomplete="username"></div>
+  <div class="fld" id="anamew"><label for="aname">이름 (정확히)</label><input type="text" id="aname" autocomplete="off"></div>
+  <div class="fld"><label for="apw">비밀번호</label><input type="password" id="apw" autocomplete="current-password"></div>
+  <div class="fld" id="apw2w"><label for="apw2">비밀번호 한 번 더</label><input type="password" id="apw2" autocomplete="new-password"></div>
+  <div id="aerr" role="alert" style="color:var(--bad);font-weight:700;min-height:24px;margin:6px 0"></div>
+  <div class="row"><span style="flex:1"></span><button class="btn" type="button" id="acancel">닫기</button><button class="btn p" type="button" id="aok">로그인</button></div>
+  <p class="sub">비밀번호를 잊어버리거나 잠기면 선생님께 말하세요. 선생님이 초기화하면 <b>학번</b>이 비밀번호가 돼요.</p>
+</div></div>
 <div id="toast"></div>
 
 <script>
 /* ===== 교사 설정 (필요하면 여기만 고치세요) ===== */
 const CONFIG={
   GALLERY_URL:'gallery/', // 갤러리 주소 (보통 바꿀 필요 없음)
-  FORM1_URL:'https://forms.gle/R2GAM63r7s1a7BkF8',  // 1차시 제출 폼
-  FORM2_URL:'https://forms.gle/99kn5JcNCUVdMpYJA',  // 2차시 제출 폼
-  FORM3_URL:'https://forms.gle/iBcs9eRWFVcs1QPH8',  // 3차시 제출 폼 (게임 파일 업로드)
-  FORM4_URL:'https://forms.gle/zWHepC66HQ9us9b37',  // 4차시 폼 (투표 + 성찰 제출)
+  WEB_APP_URL:'https://script.google.com/macros/s/AKfycbx7O00duLbWijtgOQQzjWc9BFB2le3dWreiqcmZYD3ppkvQLDffucAaUSkUJXbmscY8eA/exec', // 제출 서버(구글 앱스크립트). 비우면 제출 버튼이 안내만 보여 줘요
   SIZE_WARN:500*1024,     // 경고 크기 (바이트)
   SIZE_MAX:1024*1024      // 상한 크기 (바이트)
 };
@@ -299,12 +327,75 @@ function copyRaw(t,okmsg){
   if(navigator.clipboard&&window.isSecureContext)navigator.clipboard.writeText(t).then(()=>toast(okmsg||'복사됨'),fb);else fb()}
 function copyText(id){copyRaw($(id).value,'복사됨')}
 
+/* 로그인·서버 호출 (로그인 정보는 메모리에만 둔다. 이 브라우저 저장소에는 넣지 않는다) */
+const A={sid:'',name:'',session:null};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const rid=()=>{if(window.crypto&&crypto.randomUUID)return crypto.randomUUID();const a=new Uint8Array(16);crypto.getRandomValues(a);return [...a].map(x=>x.toString(16).padStart(2,'0')).join('')};
+const MSGS={NETWORK:'인터넷 연결을 확인하고 다시 눌러 주세요.',TIMEOUT:'서버가 느려요. 잠시 뒤 다시 눌러 주세요.',BAD_RESPONSE:'서버 응답이 이상해요. 잠시 뒤 다시 눌러 주세요.',CONFIG:'제출 서버 주소가 설정되지 않았어요. 선생님께 말해 주세요.'};
+async function api(action,payload){
+  if(!CONFIG.WEB_APP_URL)return{ok:false,code:'CONFIG',message:MSGS.CONFIG};
+  let tries=0;
+  for(;;){
+    let code=null,data=null;const ctrl=new AbortController(),tm=setTimeout(()=>ctrl.abort(),45000);
+    try{
+      const r=await fetch(CONFIG.WEB_APP_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(Object.assign({action},payload||{})),redirect:'follow',signal:ctrl.signal});
+      const t=await r.text();try{data=JSON.parse(t)}catch(e){data=null}
+      if(!data||typeof data!=='object'){data=null;code=r.ok?'BAD_RESPONSE':'HTTP_'+r.status}else if(data.ok!==true)code=data.code||'SERVER_ERROR';
+    }catch(e){code=e&&e.name==='AbortError'?'TIMEOUT':'NETWORK'}
+    clearTimeout(tm);
+    if(!code)return{ok:true,data};
+    const retry=code==='BUSY'||code==='NETWORK'||code==='TIMEOUT'||/^HTTP_(429|5\d\d)$/.test(code);
+    if(retry&&tries<3){tries++;await sleep((code==='BUSY'?2000:500)*Math.pow(2,tries-1)+Math.random()*1500);continue}
+    return{ok:false,code,message:(data&&data.message)||MSGS[code]||'오류가 났어요 ('+code+'). 선생님께 말해 주세요.'};
+  }
+}
+// 로그인이 필요한 호출. 로그인 시간이 지났으면 다시 로그인하게 한다
+async function sapi(action,payload){
+  if(!A.session){openAuth('login','먼저 로그인해 주세요.');return{ok:false,code:'NO_LOGIN',message:'먼저 로그인해 주세요.'}}
+  const r=await api(action,Object.assign({session:A.session},payload||{}));
+  if(!r.ok&&r.code==='SESSION_EXPIRED'){A.session=null;refresh();openAuth('login','로그인 시간이 지났어요. 다시 로그인해 주세요.')}
+  return r}
+let amode='login';
+function setAuthMode(m){amode=m;const reg=m==='register';
+  $('at').textContent=reg?'🔑 처음 등록':'🔑 로그인';$('anamew').hidden=!reg;$('apw2w').hidden=!reg;
+  $('aok').textContent=reg?'등록하고 로그인':'로그인';$('amlogin').className='btn'+(reg?'':' p');$('amreg').className='btn'+(reg?' p':'');
+  $('ahint').textContent=reg?'처음 한 번만 등록해요. 비밀번호는 4~20자, 나만 아는 것으로 정하세요. 쉬운 비밀번호(1234 등)나 학번·이름이 들어간 비밀번호는 안 돼요.':'등록했던 학번과 비밀번호를 입력하세요.';
+  $('apw').autocomplete=reg?'new-password':'current-password'}
+function openAuth(m,msg){setAuthMode(m||'login');$('aerr').textContent=msg||'';$('aid').value=A.sid||S.f.sid||'';$('apw').value='';$('apw2').value='';
+  $('aov').classList.add('on');document.body.style.overflow='hidden';setTimeout(()=>{($('aid').value?$('apw'):$('aid')).focus()},50)}
+function closeAuth(){$('aov').classList.remove('on');document.body.style.overflow=''}
+// 이 브라우저에 다른 학생의 기록이 남아 있을 때 비운다
+function resetLocal(){S={f:{},rows:{log:[{},{},{}],fb:[{},{}]}};document.querySelectorAll('[data-k]').forEach(el=>{el.value=''});$('gcode').value='';renderRows();save()}
+async function doAuth(){
+  const id=$('aid').value.trim(),pw=$('apw').value,err=m=>{$('aerr').textContent=m};
+  if(!parseId(id))return err('학번은 숫자 5자리예요 (예: 20315)');
+  if(!pw)return err('비밀번호를 입력하세요');
+  let name='';
+  if(amode==='register'){name=$('aname').value.trim();if(!name)return err('이름을 입력하세요');if(pw!==$('apw2').value)return err('비밀번호 두 칸이 서로 달라요')}
+  $('aok').disabled=true;err('확인하는 중… (몇 초 걸릴 수 있어요)');
+  if(amode==='register'){const r0=await api('register',{studentId:id,name,password:pw});if(!r0.ok){$('aok').disabled=false;return err(r0.message)}}
+  const r=await api('login',{studentId:id,password:pw});$('aok').disabled=false;
+  if(!r.ok)return err(r.message);
+  if(!r.data.session)return err('로그인하지 못했어요. 선생님께 말해 주세요.');
+  if(S.f.sid&&S.f.sid!==id){
+    if(!confirm('이 컴퓨터에는 '+S.f.sid+' 학생의 기록이 남아 있어요.\n지우고 '+id+' 학생으로 새로 시작할까요?\n(남은 기록은 사라져요)'))return err('로그인을 취소했어요.');
+    resetLocal()}
+  A.sid=id;A.name=r.data.name;A.session=r.data.session;S.f.sid=id;S.f.sname=A.name;save();$('sid').value=id;$('sname').value=A.name;
+  closeAuth();refresh();loadStatus();toast(A.name+' 님, 로그인했어요.',2000)}
+$('loginbtn').onclick=()=>openAuth('login');
+$('logoutbtn').onclick=()=>{A.session=null;A.sid=A.name='';refresh();toast('로그아웃했어요.')};
+$('amlogin').onclick=()=>setAuthMode('login');$('amreg').onclick=()=>setAuthMode('register');
+$('acancel').onclick=closeAuth;$('aok').onclick=doAuth;
+['aid','aname','apw','apw2'].forEach(i=>$(i).addEventListener('keydown',e=>{if(e.key==='Enter')doAuth()}));
+
 /* 학번 */
 function parseId(v){const m=(v||'').match(/^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-3]\d|40)$/);return m?{g:+m[1],c:+m[2],n:+m[3]}:null}
-function signed(){return !!(S.f.pledge_done&&S.f.signed_id===S.f.sid&&S.f.signed_name===S.f.sname&&parseId(S.f.sid)&&(S.f.sname||'').trim())}
+function signed(){return !!(A.session&&S.f.pledge_done&&S.f.signed_id===S.f.sid&&S.f.signed_name===S.f.sname&&parseId(S.f.sid)&&(S.f.sname||'').trim())}
 function refresh(){
   const id=parseId(S.f.sid),info=$('idinfo');
-  if(!S.f.sid)info.textContent='';else if(id){info.textContent=id.g+'학년 '+id.c+'반 '+id.n+'번';info.className=''}else{info.textContent='학번은 숫자 5자리 (예: 20315)';info.className='err'}
+  if(!S.f.sid)info.textContent='로그인하세요';else if(id){info.textContent=id.g+'학년 '+id.c+'반 '+id.n+'번';info.className=''}else{info.textContent='';info.className='err'}
+  $('loginbtn').hidden=!!A.session;$('logoutbtn').hidden=!A.session;
+  $('signbtn').textContent=A.session?'✍ 서약서 서명하기':'🔑 로그인하기';
   const ok=signed();
   if($('t3').classList.contains('on'))loadGallery();
   $('t1body').classList.toggle('lock',!ok);
@@ -334,7 +425,6 @@ function loadGallery(){
   $('votecls').textContent=' ('+id.c+'반)';
   if(f.dataset.u!==u){f.dataset.u=u;f.src=u+'&embed=1'}
   $('galbig').href=u}
-function setLinks(){document.querySelectorAll('[data-link]').forEach(a=>{const u=CONFIG[a.dataset.link];if(u)a.href=u;else{a.classList.add('off');a.title='선생님이 주소를 설정하면 열려요'}})}
 
 /* 표 */
 const DEF={log:['내가 입력한 프롬프트','결과 (잘 된 점 / 문제)','다음 수정 요청'],fb:['체험한 작품 (번호)','칭찬 1','개선 제안 1','불편했던 부분 (없으면 없음)','과학 개념 정확성 (정확/일부 오류/모름)']};
@@ -396,17 +486,49 @@ function buildSum(sec,name){
   if(sec==='t2'){for(const t of ['log','fb']){out+='■ '+(t==='log'?'제작 일지':'피드백 카드')+'\n';S.rows[t].forEach((r,i)=>{out+=(i+1)+') '+DEF[t].map((h,j)=>h+': '+((r[j]||'').trim()||'-')).join(' / ')+'\n'});out+='\n'}}
   return out.trim()+'\n'}
 function ready(){
-  if(!parseId(S.f.sid)){toast('위쪽에 학번 5자리를 정확히 입력하세요');return false}
-  if(!(S.f.sname||'').trim()){toast('위쪽에 이름을 입력하세요');return false}
+  if(!A.session){toast('먼저 위쪽 [로그인]을 누르세요');openAuth('login');return false}
   if(!signed()){toast('1차시에서 서약서에 서명하세요');return false}
   return true}
-function copySum(sec,name){if(!ready())return;copyRaw(buildSum(sec,name),'복사됨! 구글 폼에 붙여넣으세요')}
+const fmtT=iso=>{const d=new Date(iso);if(isNaN(d))return '';const p=n=>(n<10?'0':'')+n;return (d.getMonth()+1)+'/'+d.getDate()+' '+p(d.getHours())+':'+p(d.getMinutes())};
+/* 글 제출 (1·2·4차시) */
+async function submitNote(sec,name){
+  if(!ready())return;
+  const text=buildSum(sec,name);
+  if(text.length>30000){toast('글이 너무 길어요. 줄여서 다시 눌러 주세요.',3000);return}
+  const b=$('nb_'+sec),st=$('ns_'+sec);b.disabled=true;st.textContent='제출하는 중…';
+  const r=await sapi('note',{section:sec,text});b.disabled=false;
+  if(!r.ok){st.textContent='❌ '+r.message;toast(r.message,3500);return}
+  st.textContent='✅ 제출했어요 ('+fmtT(r.data.savedAt)+'). 고쳐서 다시 제출하면 마지막 것이 쓰여요.';toast('제출했어요!',2000)}
+/* 투표 */
+const VK=['sci','fun','creative','practical'];
+async function galleryNums(){
+  const id=parseId(S.f.sid);if(!id)return null;
+  try{const r=await fetch('data/class'+String(id.c).padStart(2,'0')+'.json',{cache:'no-store'});if(!r.ok)return null;
+    const d=await r.json();return Array.isArray(d.games)&&d.games.length?d.games.map(g=>g.n):null}catch(e){return null}}
+async function submitVote(){
+  if(!ready())return;
+  const votes={};
+  for(const k of VK){const v=$('v_'+k).value.trim();if(!/^\d{1,2}$/.test(v)||+v<1){$('vstate').textContent='❌ 번호 네 칸을 모두 1~99 숫자로 적어 주세요.';return}votes[k]=+v}
+  const nums=await galleryNums();
+  if(nums){const bad=VK.filter(k=>!nums.includes(votes[k]));if(bad.length){$('vstate').textContent='❌ 우리 반 갤러리에 없는 번호가 있어요: '+bad.map(k=>votes[k]).join(', ');return}}
+  $('vbtn').disabled=true;$('vstate').textContent='제출하는 중…';
+  const r=await sapi('vote',{votes});$('vbtn').disabled=false;
+  if(!r.ok){$('vstate').textContent='❌ '+r.message;toast(r.message,3500);return}
+  $('vstate').textContent='✅ 투표했어요 ('+fmtT(r.data.savedAt)+'). 바꾸고 싶으면 다시 제출하세요.';toast('투표했어요!',2000)}
+// 로그인 뒤 내 제출 현황을 불러와 화면에 표시
+async function loadStatus(){
+  const r=await sapi('status');if(!r.ok)return;
+  for(const sec of ['t1','t2','t3']){const at=r.data.notes&&r.data.notes[sec];$('ns_'+sec).textContent=at?'✅ 제출함 ('+fmtT(at)+')':'아직 제출하지 않았어요.'}
+  const v=r.data.vote;
+  if(v&&v.votes)for(const k of VK){if(v.votes[k]!=null)$('v_'+k).value=v.votes[k]}
+  $('vstate').textContent=!r.data.voteOpen?'투표가 닫혀 있어요.':v?'✅ 투표함 ('+fmtT(v.at)+'). 바꾸려면 다시 제출하세요.':'아직 투표하지 않았어요.';
+  $('vbtn').disabled=!r.data.voteOpen}
+function copySum(sec,name){if(!ready())return;copyRaw(buildSum(sec,name),'복사됨!')}
 
 /* 서명 팝업 */
 let ink=false;
 function openPledge(){
-  if(!parseId(S.f.sid)){toast('위쪽에 학번 5자리를 정확히 입력하세요');$('sid').focus();return}
-  if(!(S.f.sname||'').trim()){toast('위쪽에 이름을 입력하세요');$('sname').focus();return}
+  if(!A.session){openAuth('login');return}
   $('pwho').textContent=S.f.sid+' '+S.f.sname;
   const box=$('pl');box.innerHTML='';
   PL.forEach((t,i)=>{const l=document.createElement('label'),c=document.createElement('input');c.type='checkbox';l.appendChild(c);l.appendChild(document.createTextNode(i+1+'. '+t));box.appendChild(l)});
@@ -466,18 +588,26 @@ function gcheck(){
   items.forEach(([c,t])=>{const li=document.createElement('li');li.className=c;li.textContent=(c==='e'?'⚠ ':c==='w'?'💡 ':'')+t;ul.appendChild(li)});
   const gt2=$('gtitle').value.trim(),gx=gt2+$('gdesc').value,sid2=S.f.sid||'',sn2=(S.f.sname||'').trim();
   const block=!code.trim()||bytes>max||!signed()||!gt2||(sid2&&gx.includes(sid2))||(sn2.length>=2&&gx.includes(sn2));
-  $('gdl').disabled=block;gstate={bytes,block};
-  $('gdl').title=!signed()?'1차시에서 서약서에 서명하세요':bytes>max?'파일이 너무 커요':!gt2?'게임 이름을 적어 주세요':'';
+  $('gdl').disabled=block;$('gsub').disabled=block;gstate={bytes,block};
+  $('gsub').title=$('gdl').title=!signed()?'1차시에서 서약서에 서명하세요':bytes>max?'파일이 너무 커요':!gt2?'게임 이름을 적어 주세요':'';
 }
-function dlGame(){
-  if(!ready())return;
+function gameFile(){
   const code=$('gcode').value.replace(/^\s*<!--\s*vibe-submit:[^>]*-->\s*/,'').replace(/^\s*<!--\s*vibe-info:[^>]*-->\s*/,'');
   const info=encodeURIComponent(JSON.stringify({t:$('gtitle').value.trim().slice(0,20),d:$('gdesc').value.trim().slice(0,40)}));
-  if(enc.encode(code).length>CONFIG.SIZE_MAX){toast('파일이 너무 커요');return}
+  if(enc.encode(code).length>CONFIG.SIZE_MAX){toast('파일이 너무 커요');return null}
+  return '<!-- vibe-submit:'+S.f.sid+'|'+S.f.sname.trim()+' -->\n<!-- vibe-info:'+info+' -->\n'+code}
+function dlGame(){
+  if(!ready())return;const t=gameFile();if(!t)return;
   const safe=s=>s.replace(/[\\/:*?"<>|\s]/g,'');
-  dl(safe(S.f.sid)+'_'+safe(S.f.sname)+'.html','<!-- vibe-submit:'+S.f.sid+'|'+S.f.sname.trim()+' -->\n<!-- vibe-info:'+info+' -->\n'+code,'text/html');
-  toast('내려받았어요! 이 파일을 제출 폼에 올리세요.',3000);
-}
+  dl(safe(S.f.sid)+'_'+safe(S.f.sname)+'.html',t,'text/html');
+  toast('내려받았어요! 백업으로 보관하세요.',3000)}
+async function submitGame(){
+  if(!ready())return;const t=gameFile();if(!t)return;
+  const st=$('gstate');$('gsub').disabled=true;st.textContent='제출하는 중… (몇 초 걸릴 수 있어요. 창을 닫지 마세요)';
+  const r=await sapi('submit',{html:t,requestId:rid()});$('gsub').disabled=false;gcheck();
+  if(!r.ok){st.textContent='❌ '+r.message;toast(r.message,4000);return}
+  st.textContent='✅ 제출했어요! '+r.data.version+'번째 제출 ('+fmtT(r.data.submittedAt)+', '+fmt(r.data.size)+'). 고쳐서 다시 제출하면 마지막 제출이 쓰여요.';
+  toast('제출했어요!',2500)}
 ['gcode','gtitle','gdesc'].forEach(i=>$(i).addEventListener('input',gcheck));
 
 /* 백업 */
@@ -485,7 +615,9 @@ function saveAll(){dl((S.f.sid||'학생')+'_'+(S.f.sname||'')+'_백업.json',JSO
 function loadAll(inp){const f=inp.files[0];if(!f)return;f.text().then(t=>{try{const o=JSON.parse(t);if(!o||typeof o.f!=='object')throw 0;S.f=o.f;S.rows=o.rows||S.rows;save();location.reload()}catch(e){alert('불러올 수 없는 파일이에요')}});inp.value=''}
 
 /* 시작 */
-bind();renderRows();setLinks();$('safe').value=SAFE;refresh();renderPlan();
+bind();renderRows();$('safe').value=SAFE;refresh();renderPlan();
+// 처음 열면 로그인부터 시작한다
+setAuthMode('login');if(CONFIG.WEB_APP_URL)setTimeout(()=>openAuth('login'),150);
 </script>
 </body>
 </html>

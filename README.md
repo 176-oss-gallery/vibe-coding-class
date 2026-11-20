@@ -4,20 +4,23 @@
 
 | 구성 | 위치 | 설명 |
 |---|---|---|
-| 학생용 앱 (메인 화면) | `site/index.html` | 서약 서명, 기획서, 제작 일지, 게임 내보내기, 제출용 요약 복사 |
+| 학생용 앱 (메인 화면) | `site/index.html` | 로그인, 서약 서명, 기획서, 제작 일지, 게임 제출, 투표 |
 | 갤러리 | `site/gallery/` | 반별 작품 목록과 플레이 화면. 앱의 4차시 탭 안에도 들어가 있고, 단독 주소(`…/gallery/`)로도 열림 |
-| 수합·공개 스크립트 | `tools/` | 제출 파일 점검(`ingest.py`)과 공개(`publish.py`) |
-| 폼 구성안 | `docs/FORMS.md` | 구글 폼 4개(투표는 4차시 폼 안) 문항과 투표 집계 방법 |
+| 제출 서버 | `apps-script/Code.gs` | 구글 시트에 붙는 앱스크립트. 로그인, 글·게임 제출, 투표, 선생님 관리자 화면. 설정은 `docs/APPS-SCRIPT-TEST.md` |
+| 수합·공개 스크립트 | `tools/` | 제출 파일 점검(`ingest.py`), 공개(`publish.py`), 투표 집계(`tally.py`) |
+| (옛) 폼 구성안 | `docs/FORMS.md` | 예전 구글 폼 방식. 지금은 쓰지 않음(되돌릴 때만 참고) |
 | 명세 | `SPEC.md` | 요구사항과 결정 사항 |
 
 ## 전체 흐름
 
 ```
-학생: 앱에서 서약·기획·제작 기록 → 요약을 구글 폼에 붙여넣기
-      Canvas 코드를 앱에 붙여넣어 .html 내보내기 → 폼에 파일 업로드
-교사: 폼 파일을 모아 내려받기 → ingest.py 로 점검 → review.csv 에서 승인(Y)
+학생: 앱에서 로그인(처음이면 등록) → 서약 → 기획·제작 기록 [제출하기]
+      Canvas 코드를 앱에 붙여넣어 [선생님께 제출하기]  (구글 시트·드라이브에 저장됨)
+교사: 관리자 화면에서 [이 반 내려받기] → zip 을 ingest.py 로 점검 → review.csv 에서 승인(Y)
       → publish.py 로 공개 → git push → GitHub Pages 갤러리에 반영
-학생: 갤러리에서 우리 반 작품 플레이 → 구글 폼으로 투표
+      (Claude 에게 "이 반 점검하고 올려 줘"라고 시켜도 됨. 공개 직전에는 꼭 확인함)
+학생: 갤러리에서 우리 반 작품 플레이 → 앱 4차시 탭에서 번호로 투표
+교사: 관리자 화면에서 투표 내려받기 → python tools/tally.py votes.csv (자기 작품 표는 뺌)
 ```
 
 공개되는 파일 이름과 갤러리 화면에는 **학번·이름이 나오지 않습니다.** 대응표(`private/mapping.csv`)는 선생님 컴퓨터에만 있고 저장소에 올라가지 않습니다(`.gitignore`로 제외).
@@ -36,23 +39,24 @@
 4. **학생 명단(선택):** `private/roster.csv`를 만들고 첫 줄에 `학번,이름`, 아래에 학생을 한 줄씩 적습니다. 미제출 명단과 다른 학생 이름 점검에 쓰입니다. (`private/`는 올라가지 않습니다.)
 5. **금칙어(선택):** `tools/banned_words.example.txt`를 `private/banned_words.txt`로 복사해 한 줄에 하나씩 학교 기준에 맞게 채웁니다.
 6. **GitHub Pages 켜기:** 저장소의 Settings → Pages → Source를 **GitHub Actions**로 선택합니다. 이후 `main`에 `site/` 변경이 올라가면 자동 배포됩니다. 주소는 `https://176-oss-gallery.github.io/vibe-coding-class/` 입니다.
-7. **앱 설정:** `site/index.html` 맨 위 `CONFIG`에 폼 주소(`FORM1_URL`~`FORM4_URL`, 현재 주소가 이미 들어 있습니다)를 넣습니다. 비워 두면 해당 버튼이 비활성으로 보입니다. 학생 접속 주소는 `…/vibe-coding-class/` 입니다(앱이 메인 화면).
-8. **구글 폼 4개 만들기:** `docs/FORMS.md`를 따라 만듭니다.
+7. **제출 서버 연결:** 구글 시트와 앱스크립트를 만들어 배포하고(`docs/APPS-SCRIPT-TEST.md` 1~2장), 웹앱 주소를 `site/index.html` 맨 위 `CONFIG.WEB_APP_URL`에 넣습니다(현재 시험용 주소가 들어 있습니다). 비워 두면 제출 기능이 안내만 보여 줍니다. 학생 접속 주소는 `…/vibe-coding-class/` 입니다(앱이 메인 화면).
+8. **관리자 화면 설정:** 스크립트 속성 `ADMIN_KEY`, `ADMIN_PASSWORD`를 넣습니다(`docs/APPS-SCRIPT-TEST.md` 2-1).
 
 ## 차시별 교사 할 일
 
 | 시점 | 할 일 |
 |---|---|
-| 1차시 후 | 폼 1 응답으로 기획서와 서약을 확인하고 주제를 승인합니다. (서약 미확인 명단은 아래 `--form1` 사용) |
-| 3차시 후 | 3차시 폼에서 올라온 게임 파일을 드라이브 폴더째 내려받아 `ingest.py`를 실행합니다. |
+| 수업 전 | 시트의 시험 기록(Accounts·Submissions·Notes·Votes·Roster의 시험 줄, 드라이브 시험 파일)을 지우고, Config `submit_per_minute`가 `5`인지 봅니다. |
+| 1차시 후 | 관리자 화면 [글 내려받기 (CSV)]로 기획서와 서약을 확인합니다. 서약 미확인 명단은 이 CSV를 아래 `--form1`에 씁니다. |
+| 3차시 후 | 관리자 화면에서 반별 zip을 내려받아 `ingest.py`를 실행합니다. |
 | 4차시 전 | `review.csv`를 확인·승인하고 `publish.py`로 공개한 뒤 push합니다. |
-| 4차시 | 갤러리 주소를 안내하고, 4차시 폼(투표 포함)으로 투표를 받습니다. |
+| 4차시 | 갤러리 주소를 안내하고, 앱 4차시 탭에서 투표를 받습니다. 끝나면 시트 Config `vote_open`을 `FALSE`로 닫고 `tally.py`로 집계합니다. |
 
 ## 명령어
 
 ```bash
 # 1) 제출 파일 점검 (폴더 또는 .zip)
-python tools/ingest.py 내려받은폴더 --roster private/roster.csv --form1 폼1응답.csv
+python tools/ingest.py 내려받은.zip --roster private/roster.csv --form1 notes_all.csv
 
 # 2) private/review.csv 를 엑셀·구글 시트로 열어 확인하고 승인 칸에 Y 입력
 #    (직접 플레이해 본 작품만 승인하세요. 상태가 '실패'인 작품은 승인해도 공개되지 않습니다.)
@@ -66,6 +70,9 @@ python tools/publish.py --no-thumbs        # 첫 화면 그림 없이 빠르게 
 
 # 4) 올리기
 git add site && git commit -m "작품 공개" && git push
+
+# 5) 투표 집계 (관리자 화면의 [투표 내려받기 (CSV)] 파일, 자기 작품에 준 표는 뺌)
+python tools/tally.py votes.csv
 ```
 
 `review.csv` 칸 설명: **상태**(통과/경고/실패), **사유**(점검 내용), **제목**·**설명**(학생이 앱에서 적은 갤러리용 게임 이름·한 줄 설명, 직접 고칠 수 있음), **승인**(Y), **크기예외**(1~2MB 작품을 허용할 때 Y).
@@ -98,7 +105,8 @@ git add site && git commit -m "작품 공개" && git push
 ## 개발과 테스트
 
 ```bash
-python tests/test_tools.py                    # 수합·공개 스크립트 (표준 라이브러리만 필요)
+python tests/test_tools.py                    # 수합·공개·집계 스크립트 (표준 라이브러리만 필요)
+node tests/test_apps_script.js                # 제출 서버 로직 (Node 필요)
 pip install playwright && playwright install chromium
 python tests/test_app.py                      # 학생용 앱
 python tests/test_gallery.py                  # 가상 제출 480개 → 갤러리까지 전체 확인
@@ -111,4 +119,6 @@ python tests/test_gallery.py                  # 가상 제출 480개 → 갤러�
 | 갤러리에 "목록을 불러오지 못했어요" | 파일을 더블클릭해 연 것이 아니라 Pages 주소로 접속했는지 확인하세요. |
 | 게임이 갤러리에서 안 움직임 | `review.csv`의 사유에서 `STORAGE`(저장 기능) 경고를 확인하고, 해당 기능을 빼도록 학생에게 안내하세요. |
 | `ingest.py`가 학번을 못 읽음 | 학생이 앱의 [내려받기]로 만든 파일인지 확인하세요. 표식이 없으면 파일 이름에서 학번을 추정하고 경고를 표시합니다. |
-| 폼이 .html 파일을 거부함 | 폼 파일 형식 선택과 학교 관리자의 업로드 제한(DLP)을 확인하세요. |
+| 학생이 "제출 서버 주소가 설정되지 않았어요" | `site/index.html`의 `CONFIG.WEB_APP_URL`이 비어 있습니다. |
+| 제출이 "서버가 느려요"로 실패 | 구글 서버가 바쁜 것입니다. 잠시 뒤 다시 누르게 하세요(앱이 자동으로 몇 번 다시 시도합니다). |
+| 학생이 로그인 못 함 | 관리자 화면에서 그 학생을 [초기화]하면 비밀번호가 학번이 되고 잠금도 풀립니다. |

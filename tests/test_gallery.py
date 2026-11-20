@@ -191,7 +191,7 @@ def main():
             ok('잘못된 주소 안내 ' + bad, 'iframe' not in pg.content().split('<script')[0] or pg.locator('iframe').count() == 0)
 
         # 앱의 4차시 탭 안에 갤러리가 끼워져 보이는지
-        pg.goto(base + 'index.html'); pg.fill('#sid', '20303')
+        pg.goto(base + 'index.html'); pg.wait_for_selector('#aov.on'); pg.evaluate("closeAuth(); S.f.sid = '20303'; $('sid').value = '20303'; refresh()")  # 로그인 대신 학번만 지정(갤러리는 학번의 반만 본다)
         pg.click('#nav button[data-t=t3]'); pg.wait_for_selector('#galframe', state='attached')
         pg.wait_for_timeout(1200)
         fr = [f for f in pg.frames if 'gallery/class.html' in f.url]
@@ -204,7 +204,7 @@ def main():
         ok('우리 반 갤러리 큰 화면 링크', 'class.html?c=3' in (pg.get_attribute('#galbig', 'href') or ''))
         ok('반 선택 화면은 앱 안에 없음', not any(f.url.endswith('gallery/') or 'gallery/index.html' in f.url for f in pg.frames))
         pg.screenshot(path=str(SHOTS / 'app_tab3_myclass.png'), full_page=True)
-        pg.fill('#sid', '')
+        pg.evaluate("S.f.sid = ''; $('sid').value = ''; refresh()")
         ok('학번 없으면 갤러리 숨김(안내 문구 없음)', not pg.locator('#galbox').is_visible() and pg.locator('#galneed').count() == 0)
         pg.screenshot(path=str(SHOTS / 'app_tab3_noid.png'), full_page=True)
 
