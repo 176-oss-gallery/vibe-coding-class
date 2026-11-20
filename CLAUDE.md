@@ -12,6 +12,7 @@
 - `site/gallery/` (index, class, play, gallery.css/js) 갤러리 / `site/data/*.json` 작품 목록(publish.py가 생성)
 - `site/games/<반2자리>/<코드>.html` 공개 게임(publish.py가 생성)
 - `tools/ingest.py, publish.py, common.py` 교사용 스크립트 / `tools/make_forms.gs` 구글 폼 생성(미시험)
+- `site/lab/` 앱스크립트 제출 시험 페이지(임시, 규칙 3의 예외: 구글 로그인 스크립트와 웹앱 요청을 씀) / `apps-script/Code.gs` 시험용 웹앱 서버. 절차는 `docs/APPS-SCRIPT-TEST.md`. 시험이 끝나면 `site/lab/`은 지운다.
 - `docs/FORMS.md` 폼 구성안 / `tests/` 테스트 / `private/` 교사 컴퓨터 전용(커밋 금지)
 
 ## 지켜야 할 규칙
@@ -25,6 +26,7 @@
 ## 테스트
 ```
 python tests/test_tools.py                 # 표준 라이브러리만
+node tests/test_apps_script.js             # 앱스크립트 시험 서버 로직 (Node 필요)
 pip install playwright && playwright install chromium
 python tests/test_app.py
 python tests/test_gallery.py <스크린샷 저장 폴더>

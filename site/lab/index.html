@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; frame-src https://accounts.google.com/gsi/; connect-src https://script.google.com https://script.googleusercontent.com https://accounts.google.com/gsi/; img-src 'self' data: https://*.googleusercontent.com">
+<title>로그인·제출 시험</title>
+<style>
+:root{--bg:#f6f7fb;--card:#fff;--tx:#1f2430;--mut:#6b7280;--pri:#4f46e5;--pri2:#eef2ff;--bd:#d9dce6;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}
+@media (prefers-color-scheme:dark){:root{--bg:#14161c;--card:#1e222b;--tx:#e8eaf0;--mut:#9aa3b2;--pri:#818cf8;--pri2:#262a45;--bd:#343a48}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;font-family:"Noto Sans KR","Malgun Gothic",system-ui,sans-serif;background:var(--bg);color:var(--tx);line-height:1.55;word-break:keep-all}
+header{background:var(--card);border-bottom:1px solid var(--bd);padding:10px 16px;position:sticky;top:0;z-index:5}
+header .in{max-width:760px;margin:0 auto;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline}
+header h1{font-size:17px;margin:0 auto 0 0}
+header .who{font-size:13px;color:var(--mut)}
+main{padding:12px 16px 48px;max-width:760px;margin:0 auto}
+.sub{color:var(--mut);font-size:14px;margin:0 0 10px}
+.btn{border:1px solid var(--bd);background:var(--card);color:var(--tx);padding:7px 14px;border-radius:7px;cursor:pointer;font:inherit;font-size:14px;display:inline-block;text-decoration:none;min-height:38px}
+.btn:hover{background:var(--pri2)}.btn.p{background:var(--pri);color:#fff;border-color:var(--pri)}.btn.p:hover{opacity:.9}
+.btn[disabled],.btn.off{opacity:.45;pointer-events:none}
+input[type=text],input[type=number],textarea,select{width:100%;padding:8px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit;font-size:14px;min-height:38px}
+input[readonly]{opacity:.7}
+textarea{resize:vertical;min-height:60px}
+:focus-visible{outline:2px solid var(--pri);outline-offset:2px}
+.fld{margin-bottom:8px}.fld label{font-size:13px;color:var(--mut);display:block;margin-bottom:2px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:480px){.g2{grid-template-columns:1fr}}
+.row{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;align-items:center}
+.notice{background:var(--pri2);border-radius:8px;padding:10px 12px;font-size:14px;margin:8px 0}
+.notice.warn{background:#fef3c733;border:1px solid var(--warn)}
+.notice.bad{background:#fee2e233;border:1px solid var(--bad)}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid var(--bd);padding:4px 6px;vertical-align:top;text-align:left}th{background:var(--pri2);white-space:nowrap}
+.tbl{overflow-x:auto}
+details{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;margin:8px 0}summary{cursor:pointer;font-weight:600;min-height:28px}
+
+/* 단계 카드 */
+.card{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--bd);border-radius:10px;padding:14px 16px;margin:0 0 12px}
+.card[data-st=ok]{border-left-color:var(--ok)}
+.card[data-st=bad]{border-left-color:var(--bad)}
+.card[data-st=run]{border-left-color:var(--pri)}
+.card .hd{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.card h2{margin:0 auto 0 0;font-size:17px;display:flex;align-items:baseline;gap:8px}
+.card h2 .n{font-variant-numeric:tabular-nums;color:var(--mut);font-weight:600}
+.st{font-size:13px;padding:2px 10px;border-radius:99px;border:1px solid var(--bd);color:var(--mut);white-space:nowrap}
+.st.ok{color:var(--ok);border-color:var(--ok);background:#dcfce733}
+.st.bad{color:var(--bad);border-color:var(--bad);background:#fee2e233}
+.st.run{color:var(--pri);border-color:var(--pri)}
+.msg{font-size:14px;margin:6px 0 0;min-height:1em;overflow-wrap:anywhere}
+.msg.ok{color:var(--ok)}.msg.bad{color:var(--bad)}.msg.warn{color:var(--warn)}
+.msg:empty{display:none}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;font-size:14px;margin:6px 0}
+.kv dt{color:var(--mut)}.kv dd{margin:0;overflow-wrap:anywhere;min-width:0}
+#gbtn{min-height:44px}
+#html{min-height:160px;font-family:Consolas,"D2Coding",monospace;font-size:12px;white-space:pre;overflow-wrap:normal}
+#size{font-size:13px;font-variant-numeric:tabular-nums;color:var(--mut)}#size.bad{color:var(--bad)}
+.mono{font-family:Consolas,"D2Coding",monospace;font-size:12px}
+#lres{white-space:pre-wrap;margin:8px 0 0;font-family:Consolas,"D2Coding",monospace;font-size:12px;background:var(--bg);border:1px solid var(--bd);border-radius:7px;padding:8px}
+#lres:empty{display:none}
+#diagT td:nth-child(3){text-align:right;font-variant-numeric:tabular-nums}
+#diagT td.ok{color:var(--ok)}#diagT td.bad{color:var(--bad)}
+#toast{position:fixed;bottom:16px;right:16px;background:#111c;color:#fff;padding:8px 16px;border-radius:8px;font-size:14px;opacity:0;transition:.3s;z-index:40;max-width:80vw;pointer-events:none}
+#toast.on{opacity:1}
+@media (prefers-reduced-motion:reduce){#toast{transition:none}}
+</style>
+</head>
+<body>
+<header>
+  <div class="in">
+    <h1>로그인·제출 시험</h1>
+    <span class="who" id="hwho">로그인 전</span>
+  </div>
+</header>
+<main>
+  <div class="notice warn" id="cfgWarn" hidden>
+    설정이 비어 있습니다. 이 파일 맨 위 CONFIG의 GOOGLE_CLIENT_ID와 WEB_APP_URL을 실제 값으로 바꾸세요. 바꾸기 전에는 서버 버튼이 꺼져 있습니다.
+  </div>
+  <p class="sub">학교 크롬북에서 로그인부터 제출까지 되는지 확인하는 시험 페이지입니다. 위에서부터 차례로 누르고, 끝나면 6번의 진단 결과를 복사해 선생님께 보내세요.</p>
+
+  <section class="card" id="c1" data-st="wait">
+    <div class="hd"><h2><span class="n">1</span>연결 확인</h2><span class="st" id="st1">대기</span></div>
+    <p class="sub">이 크롬북에서 과제 서버에 접속되는지 봅니다. 로그인은 필요 없습니다.</p>
+    <div class="row"><button class="btn p net" id="bPing" type="button">연결 확인</button></div>
+    <p class="msg" id="m1" role="status"></p>
+  </section>
+
+  <section class="card" id="c2" data-st="wait">
+    <div class="hd"><h2><span class="n">2</span>구글 로그인</h2><span class="st" id="st2">대기</span></div>
+    <p class="sub">학교 구글 계정으로 로그인하세요. 로그인 정보는 이 창을 닫으면 사라집니다.</p>
+    <div id="gbtn"></div>
+    <dl class="kv" id="who" hidden>
+      <dt>계정</dt><dd id="wEmail"></dd>
+      <dt>이름</dt><dd id="wName"></dd>
+    </dl>
+    <div class="row" id="outRow" hidden><button class="btn" id="bOut" type="button">로그아웃</button></div>
+    <p class="msg" id="m2" role="status"></p>
+  </section>
+
+  <section class="card" id="c3" data-st="wait">
+    <div class="hd"><h2><span class="n">3</span>학번·이름 연결</h2><span class="st" id="st3">대기</span></div>
+    <p class="sub">로그인한 계정에 내 학번을 한 번만 연결합니다. 한 번 연결하면 바꿀 수 없으니 정확히 입력하세요.</p>
+    <div class="g2">
+      <div class="fld"><label for="sid">학번 5자리 (예: 20315)</label><input type="text" id="sid" inputmode="numeric" maxlength="5" autocomplete="off"></div>
+      <div class="fld"><label for="sname">이름</label><input type="text" id="sname" maxlength="20" autocomplete="off"></div>
+    </div>
+    <div class="row"><button class="btn p net" id="bBind" type="button">학번 연결</button></div>
+    <p class="msg" id="m3" role="status"></p>
+  </section>
+
+  <section class="card" id="c4" data-st="wait">
+    <div class="hd"><h2><span class="n">4</span>HTML 붙여넣기와 제출</h2><span class="st" id="st4">대기</span></div>
+    <p class="sub">만든 HTML 코드 전체를 붙여넣고 제출하세요. 다시 제출하면 새 버전으로 저장됩니다.</p>
+    <div class="fld"><label for="html">HTML 코드</label><textarea id="html" spellcheck="false" autocomplete="off" placeholder="&lt;!DOCTYPE html&gt; 로 시작하는 코드 전체"></textarea></div>
+    <div class="row"><button class="btn p net" id="bSubmit" type="button">제출</button><span id="size">0KB / 2MB</span></div>
+    <p class="msg" id="m4" role="status"></p>
+  </section>
+
+  <section class="card" id="c5" data-st="wait">
+    <div class="hd"><h2><span class="n">5</span>내 제출 이력</h2><span class="st" id="st5">대기</span></div>
+    <p class="sub">서버에 저장된 내 제출물 목록입니다. 해시는 파일 내용이 같은지 확인하는 값입니다.</p>
+    <div class="row"><button class="btn net" id="bList" type="button">이력 불러오기</button></div>
+    <div class="tbl" id="listWrap" hidden><table><thead><tr><th>버전</th><th>시각</th><th>크기</th><th>해시</th></tr></thead><tbody id="listB"></tbody></table></div>
+    <p class="msg" id="m5" role="status"></p>
+  </section>
+
+  <section class="card" id="c6" data-st="wait">
+    <div class="hd"><h2><span class="n">6</span>진단</h2><span class="st" id="st6">기록 0건</span></div>
+    <p class="sub">각 단계의 결과와 이 기기 정보입니다. 로그인 토큰, 전체 이메일, HTML 내용은 들어가지 않습니다.</p>
+    <div class="row"><button class="btn p" id="bCopy" type="button">진단 결과 복사</button></div>
+    <dl class="kv mono" id="envL"></dl>
+    <div class="tbl"><table id="diagT"><thead><tr><th>단계</th><th>결과</th><th>응답 ms</th><th>오류 코드</th><th>시각</th></tr></thead><tbody id="diagB"></tbody></table></div>
+  </section>
+
+  <details id="c7" hidden>
+    <summary>7. 부하 시험 (선생님용)</summary>
+    <p class="sub">여러 명이 동시에 쓰는 상황을 흉내 냅니다. 결과는 6번 진단에도 남습니다.</p>
+    <div class="fld" style="max-width:160px"><label for="ln">요청 수</label><input type="number" id="ln" min="1" max="50"></div>
+    <div class="row">
+      <button class="btn net" id="bLPing" type="button">연결 확인 동시 요청</button>
+      <button class="btn net" id="bLSub" type="button">제출 동시 요청</button>
+    </div>
+    <p class="sub">제출 시험은 로그인과 학번 연결이 필요합니다. 학생 학번 대신 선생님용 시험 학번으로 연결한 계정에서 하세요. 요청 수만큼 드라이브에 파일이 생깁니다.</p>
+    <pre id="lres" aria-live="polite"></pre>
+  </details>
+</main>
+<div id="toast" role="status"></div>
+
+<script>
+const CONFIG = { GOOGLE_CLIENT_ID: 'YOUR_CLIENT_ID.apps.googleusercontent.com', WEB_APP_URL: 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec', LOAD_TEST_N: 30 };
+
+const MAX_BYTES = 2 * 1024 * 1024;
+const ID_RE = /^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-3]\d|40)$/;
+const ERR = {
+  BAD_REQUEST: '요청 형식이 잘못되었습니다. 페이지를 새로고침하고 다시 해 보세요.',
+  TOKEN_INVALID: '로그인이 만료되었습니다. 다시 로그인해 주세요.',
+  DOMAIN_NOT_ALLOWED: '학교 구글 계정만 쓸 수 있습니다. 로그아웃하고 학교 계정으로 로그인하세요.',
+  NOT_IN_ROSTER: '명단에 없는 학번입니다. 학번을 다시 확인하고, 맞다면 선생님께 알리세요.',
+  ID_BOUND_TO_OTHER: '이 학번은 이미 다른 계정에 연결되어 있습니다. 선생님께 알리세요.',
+  EMAIL_BOUND_TO_OTHER_ID: '이 계정은 이미 다른 학번에 연결되어 있습니다. 선생님께 알리세요.',
+  NOT_BOUND: '학번이 아직 연결되지 않았습니다. 3번에서 학번을 먼저 연결하세요.',
+  TOO_LARGE: '파일이 2MB를 넘습니다. 큰 이미지를 줄이거나 빼고 다시 제출하세요.',
+  NOT_HTML: 'HTML 코드가 아닙니다. < 로 시작하는 코드 전체를 붙여넣으세요.',
+  SESSION_CLOSED: '지금은 제출 시간이 아닙니다. 선생님 안내를 기다리세요.',
+  BUSY: '서버가 바쁩니다. 잠시 뒤 다시 눌러 보세요.',
+  SERVER_ERROR: '서버에서 오류가 났습니다. 잠시 뒤 다시 해 보고, 계속되면 선생님께 알리세요.',
+  NETWORK: '서버에 접속하지 못했습니다. 와이파이 연결을 확인하세요. 계속되면 학교 방화벽이 막고 있을 수 있습니다.',
+  TIMEOUT: '서버 응답이 45초 넘게 없습니다. 잠시 뒤 다시 해 보세요.',
+  BAD_RESPONSE: '서버 응답을 읽지 못했습니다. 웹 앱 배포의 액세스 권한 설정을 선생님이 확인해야 합니다.',
+  NO_TOKEN: '먼저 2번에서 로그인하세요.',
+  CONFIG: '설정이 비어 있어 서버에 접속할 수 없습니다.'
+};
+const errText = (code, msg) => ERR[code] || (/^HTTP_/.test(code) ? '서버가 오류 응답(' + code.slice(5) + ')을 보냈습니다. 잠시 뒤 다시 해 보세요.' : (msg || '알 수 없는 오류입니다.'));
+
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const cfgOk = !/YOUR_/.test(CONFIG.GOOGLE_CLIENT_ID + CONFIG.WEB_APP_URL);
+
+// 상태: 토큰은 이 변수에만 둔다. 저장소에 쓰지 않는다.
+let idToken = null;
+let me = null;          // whoami 결과
+let gisState = '로드 중'; // 로드 중 / 로드됨 / 실패
+let busy = {};
+let diag = [];
+
+/* ---------- 화면 도우미 ---------- */
+function setSt(n, st, label) {
+  const c = $('c' + n), s = $('st' + n);
+  c.dataset.st = st;
+  s.className = 'st' + (st === 'wait' ? '' : ' ' + st);
+  s.textContent = label || ({ wait: '대기', ok: '성공', bad: '실패', run: '진행 중' })[st];
+}
+function msg(n, text, cls) { const m = $('m' + n); m.textContent = text || ''; m.className = 'msg' + (cls ? ' ' + cls : ''); }
+function toast(t) { const e = $('toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove('on'), 2200); }
+function fmtSize(b) { return b >= 1024 * 1024 ? (b / 1024 / 1024).toFixed(2) + 'MB' : Math.ceil(b / 1024) + 'KB'; }
+function fmtTime(d) { const x = new Date(d); return isNaN(x) ? String(d || '') : x.toLocaleString('ko-KR', { hour12: false }); }
+function nowT() { return new Date().toLocaleTimeString('ko-KR', { hour12: false }); }
+
+/* ---------- 진단 ---------- */
+function logDiag(step, ok, ms, code) {
+  const r = { step, result: ok ? '성공' : '실패', ms: ms == null ? '' : String(ms), code: code || '', time: nowT() };
+  diag.push(r);
+  const tr = document.createElement('tr');
+  [r.step, r.result, r.ms, r.code, r.time].forEach((v, i) => {
+    const td = document.createElement('td'); td.textContent = v;
+    if (i === 1) td.className = ok ? 'ok' : 'bad';
+    tr.appendChild(td);
+  });
+  $('diagB').appendChild(tr);
+  $('st6').textContent = '기록 ' + diag.length + '건';
+}
+function envInfo() {
+  let host = '';
+  try { host = new URL(CONFIG.WEB_APP_URL).host; } catch (e) { host = '(잘못된 주소)'; }
+  const uad = navigator.userAgentData;
+  const domain = me && (me.domain || (me.email ? String(me.email).split('@')[1] : '')) || '(로그인 전)';
+  return [
+    ['브라우저', navigator.userAgent],
+    ['플랫폼', uad ? (uad.platform || '?') + (uad.mobile ? ' (모바일)' : '') : '(정보 없음)'],
+    ['화면', screen.width + 'x' + screen.height + ', 창 ' + innerWidth + 'x' + innerHeight + ', 배율 ' + devicePixelRatio],
+    ['언어', navigator.language],
+    ['온라인', navigator.onLine ? '예' : '아니오'],
+    ['페이지', location.origin],
+    ['서버 주소', host],
+    ['설정', cfgOk ? '입력됨' : '비어 있음'],
+    ['구글 로그인 스크립트', gisState],
+    ['FedCM 지원', 'IdentityCredential' in window ? '예' : '아니오'],
+    ['서드파티 쿠키', '알 수 없음'],
+    ['로그인 도메인', domain],
+    ['학번 연결', me && me.studentId ? '됨' : '안 됨']
+  ];
+}
+function renderEnv() {
+  const dl = $('envL'); dl.textContent = '';
+  envInfo().forEach(([k, v]) => {
+    const dt = document.createElement('dt'); dt.textContent = k;
+    const dd = document.createElement('dd'); dd.textContent = v;
+    dl.append(dt, dd);
+  });
+}
+async function copyDiag() {
+  renderEnv();
+  const lines = ['[진단 결과] ' + new Date().toLocaleString('ko-KR', { hour12: false })];
+  envInfo().forEach(([k, v]) => lines.push(k + ': ' + v));
+  lines.push('', '단계\t결과\t응답ms\t오류코드\t시각');
+  diag.forEach(r => lines.push([r.step, r.result, r.ms, r.code, r.time].join('\t')));
+  const text = lines.join('\n');
+  let done = false;
+  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); done = true; } } catch (e) {}
+  if (!done) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { done = document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+  }
+  toast(done ? '복사했습니다. 선생님께 붙여넣어 보내세요.' : '복사하지 못했습니다. 표를 직접 선택해 복사하세요.');
+}
+
+/* ---------- 서버 호출 ---------- */
+async function call(action, payload, opt) {
+  payload = payload || {}; opt = opt || {};
+  const label = opt.label || action;
+  if (!cfgOk) return { ok: false, code: 'CONFIG', ms: 0, retries: 0 };
+  let retries = 0, refreshed = false;
+  const tAll = performance.now();
+  for (let attempt = 0; ; attempt++) {
+    const body = Object.assign({ action }, payload);
+    if (action !== 'ping') {
+      if (!idToken) { if (!opt.quiet) logDiag(label, false, null, 'NO_TOKEN'); return { ok: false, code: 'NO_TOKEN', ms: 0, retries }; }
+      body.idToken = idToken;
+    }
+    const t0 = performance.now();
+    let code = null, data = null;
+    const ctrl = new AbortController();
+    const tm = setTimeout(() => ctrl.abort(), 45000);
+    try {
+      const r = await fetch(CONFIG.WEB_APP_URL, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(body), redirect: 'follow', signal: ctrl.signal
+      });
+      const txt = await r.text();
+      try { data = JSON.parse(txt); } catch (e) { data = null; }
+      if (!data || typeof data !== 'object') { data = null; code = r.ok ? 'BAD_RESPONSE' : 'HTTP_' + r.status; }
+      else if (data.ok !== true) code = data.code || (r.ok ? 'SERVER_ERROR' : 'HTTP_' + r.status);
+      else if (!r.ok) code = 'HTTP_' + r.status;
+    } catch (e) {
+      code = e && e.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK';
+    }
+    clearTimeout(tm);
+    const ms = Math.round(performance.now() - t0);
+    if (!opt.quiet) logDiag(label + (attempt ? ' (재시도 ' + attempt + ')' : ''), !code, ms, code);
+    const totalMs = Math.round(performance.now() - tAll);
+    if (!code) return { ok: true, data, ms, totalMs, retries };
+
+    // 429, 5xx, JSON이 아닌 오류 응답(HTTP_*), 네트워크/시간 초과, BUSY는 다시 시도
+    const retryable = code === 'BUSY' || code === 'NETWORK' || code === 'TIMEOUT' || /^HTTP_(429|5\d\d)$/.test(code) || (/^HTTP_/.test(code) && !data);
+    if (retryable && retries < 3) {
+      retries++;
+      const base = code === 'BUSY' ? 2000 : 500;
+      await sleep(base * Math.pow(2, retries - 1) + Math.random() * (code === 'BUSY' ? 2000 : 400));
+      continue;
+    }
+    if (code === 'TOKEN_INVALID' && !refreshed) {
+      refreshed = true;
+      if (await refreshToken()) continue;
+    }
+    if (code === 'TOKEN_INVALID') signedOut('다시 로그인해 주세요.');
+    return { ok: false, code, message: data && data.message, data, ms, totalMs, retries };
+  }
+}
+
+/* ---------- 구글 로그인 ---------- */
+let pendingRefresh = null, refreshing = null;
+function initGis(autoSelect) {
+  google.accounts.id.initialize({
+    client_id: CONFIG.GOOGLE_CLIENT_ID,
+    callback: onCredential,
+    auto_select: !!autoSelect,
+    use_fedcm_for_prompt: true
+  });
+}
+function renderGBtn() {
+  const box = $('gbtn'); box.textContent = '';
+  if (!cfgOk) { box.textContent = '설정이 비어 있어 로그인 버튼을 표시하지 않습니다.'; box.className = 'sub'; return; }
+  if (gisState !== '로드됨') { box.textContent = gisState === '실패' ? '구글 로그인 스크립트를 불러오지 못했습니다. 학교 네트워크가 accounts.google.com을 막고 있을 수 있습니다.' : '로그인 버튼을 불러오는 중입니다.'; box.className = 'sub'; return; }
+  box.className = '';
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  google.accounts.id.renderButton(box, {
+    type: 'standard', theme: dark ? 'filled_black' : 'outline', size: 'large',
+    text: 'signin_with', shape: 'rectangular', locale: 'ko',
+    width: Math.min(320, Math.max(200, box.clientWidth || 280))
+  });
+}
+function gisReady() {
+  if (gisState === '실패' && !idToken) setSt(2, 'wait');
+  gisState = '로드됨';
+  logDiag('구글 스크립트', true, Math.round(performance.now()), '');
+  if (cfgOk) { try { initGis(false); } catch (e) { gisState = '실패'; logDiag('구글 초기화', false, null, 'GIS_INIT'); } }
+  renderGBtn(); renderEnv();
+}
+function gisFail() {
+  gisState = '실패';
+  logDiag('구글 스크립트', false, null, 'GIS_LOAD');
+  renderGBtn(); renderEnv(); setSt(2, 'bad');
+}
+function onCredential(resp) {
+  if (!resp || !resp.credential) return;
+  idToken = resp.credential;
+  if (pendingRefresh) { const f = pendingRefresh; pendingRefresh = null; f(true); return; }
+  logDiag('구글 로그인', true, null, '');
+  afterSignIn();
+}
+function refreshToken() {
+  if (refreshing) return refreshing;
+  refreshing = new Promise(res => {
+    if (gisState !== '로드됨') return res(false);
+    idToken = null;
+    const tm = setTimeout(() => { pendingRefresh = null; res(false); }, 15000);
+    pendingRefresh = ok => { clearTimeout(tm); res(ok); };
+    try { initGis(true); google.accounts.id.prompt(); }
+    catch (e) { clearTimeout(tm); pendingRefresh = null; res(false); }
+  }).then(ok => {
+    logDiag('토큰 새로 받기', ok, null, ok ? '' : 'REFRESH_FAIL');
+    try { initGis(false); } catch (e) {}
+    refreshing = null;
+    return ok;
+  });
+  return refreshing;
+}
+async function afterSignIn() {
+  setSt(2, 'run'); msg(2, '계정을 확인하는 중입니다.');
+  $('gbtn').hidden = true;
+  const r = await call('whoami');
+  refresh();
+  if (!r.ok) {
+    setSt(2, 'bad'); msg(2, errText(r.code, r.message), 'bad');
+    $('outRow').hidden = false;
+    return;
+  }
+  me = r.data;
+  setSt(2, 'ok'); msg(2, '');
+  $('who').hidden = false; $('outRow').hidden = false;
+  $('wEmail').textContent = me.email || '';
+  $('wName').textContent = me.displayName || '';
+  $('hwho').textContent = (me.displayName || '') + (me.studentId ? ' (' + me.studentId + ')' : '');
+  if (me.studentId) showBound(me.studentId, me.name, '이미 연결된 학번입니다.');
+  else { setSt(3, 'wait'); msg(3, '학번과 이름을 입력하고 연결을 누르세요.'); }
+  renderEnv(); refresh();
+}
+function signedOut(text) {
+  idToken = null; me = null;
+  try { google.accounts.id.disableAutoSelect(); } catch (e) {}
+  $('who').hidden = true; $('outRow').hidden = true; $('gbtn').hidden = false;
+  renderGBtn();
+  $('hwho').textContent = '로그인 전';
+  setSt(2, text ? 'bad' : 'wait'); msg(2, text || '', text ? 'bad' : '');
+  unlockBind(); setSt(3, 'wait'); msg(3, '');
+  renderEnv(); refresh();
+}
+
+/* ---------- 3. 학번 연결 ---------- */
+function showBound(id, name, note) {
+  $('sid').value = id || ''; $('sname').value = name || '';
+  $('sid').readOnly = true; $('sname').readOnly = true;
+  setSt(3, 'ok', '연결됨'); msg(3, note, 'ok');
+  $('hwho').textContent = ((me && me.displayName) || '') + ' (' + id + ')';
+  refresh();
+}
+function unlockBind() { $('sid').readOnly = false; $('sname').readOnly = false; }
+async function doBind() {
+  const id = $('sid').value.trim(), name = $('sname').value.trim();
+  if (!ID_RE.test(id)) { setSt(3, 'bad'); msg(3, '학번 형식이 맞지 않습니다. 학년 1자리, 반 2자리, 번호 2자리로 5자리를 쓰세요. 예: 20315', 'bad'); $('sid').focus(); return; }
+  if (!name || name.length > 20) { setSt(3, 'bad'); msg(3, '이름을 1~20자로 입력하세요.', 'bad'); $('sname').focus(); return; }
+  busy.bind = true; refresh(); setSt(3, 'run'); msg(3, '연결하는 중입니다.');
+  const r = await call('bind', { studentId: id, name });
+  busy.bind = false;
+  if (!r.ok) { setSt(3, 'bad'); msg(3, errText(r.code, r.message), 'bad'); refresh(); return; }
+  const d = r.data;
+  if (me) { me.studentId = d.studentId; me.name = d.name; }
+  let note = d.alreadyBound ? '이미 연결된 학번입니다.' : '연결되었습니다.';
+  if (d.nameMismatch) note += ' 입력한 이름이 명단과 다릅니다. 맞는지 선생님께 확인하세요.';
+  showBound(d.studentId, d.name, note);
+  if (d.nameMismatch) $('m3').className = 'msg warn';
+  renderEnv();
+}
+
+/* ---------- 4. 제출 ---------- */
+// 클릭 1번당 1개. 재시도 때는 같은 값을 다시 보내 서버가 중복 저장을 막는다(duplicate:true = 성공).
+function newRequestId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  const a = new Uint8Array(16); crypto.getRandomValues(a);
+  return Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
+}
+const enc = new TextEncoder();
+let htmlBytes = 0;
+function checkHtml() {
+  const v = $('html').value;
+  htmlBytes = enc.encode(v).length;
+  const s = $('size');
+  s.textContent = fmtSize(htmlBytes) + ' / 2MB';
+  s.className = htmlBytes > MAX_BYTES ? 'bad' : '';
+  const t = v.trim();
+  let warn = '';
+  if (htmlBytes > MAX_BYTES) warn = ERR.TOO_LARGE;
+  else if (t && t[0] !== '<') warn = ERR.NOT_HTML;
+  if (warn) { msg(4, warn, 'bad'); checkHtml.warned = true; }
+  else if (checkHtml.warned) { msg(4, ''); checkHtml.warned = false; }
+  refresh();
+}
+function htmlValid() { const t = $('html').value.trim(); return t.length > 0 && t[0] === '<' && htmlBytes <= MAX_BYTES; }
+async function doSubmit() {
+  if (!htmlValid()) return;
+  busy.submit = true; refresh(); setSt(4, 'run'); msg(4, '제출하는 중입니다.');
+  const r = await call('submit', { html: $('html').value, requestId: newRequestId() });
+  busy.submit = false; refresh();
+  if (!r.ok) { setSt(4, 'bad'); msg(4, errText(r.code, r.message), 'bad'); return; }
+  const d = r.data;
+  setSt(4, 'ok');
+  msg(4, (d.duplicate ? '이미 저장된 제출입니다. ' : '제출했습니다. ') + '버전 ' + d.version + ', ' + fmtSize(d.size || 0) + ', ' + fmtTime(d.submittedAt) + ', 해시 ' + String(d.sha256 || '').slice(0, 12), 'ok');
+  doList();
+}
+
+/* ---------- 5. 이력 ---------- */
+async function doList() {
+  busy.list = true; refresh(); setSt(5, 'run'); msg(5, '불러오는 중입니다.');
+  const r = await call('list_mine');
+  busy.list = false; refresh();
+  if (!r.ok) { setSt(5, 'bad'); msg(5, errText(r.code, r.message), 'bad'); return; }
+  const items = Array.isArray(r.data.items) ? r.data.items.slice() : [];
+  items.sort((a, b) => (b.version || 0) - (a.version || 0));
+  const tb = $('listB'); tb.textContent = '';
+  items.forEach(it => {
+    const tr = document.createElement('tr');
+    const h = String(it.sha256 || '');
+    [String(it.version ?? ''), fmtTime(it.submittedAt), fmtSize(Number(it.size) || 0), h.slice(0, 12)].forEach((v, i) => {
+      const td = document.createElement('td'); td.textContent = v;
+      if (i === 3) { td.className = 'mono'; td.title = h; }
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  $('listWrap').hidden = items.length === 0;
+  setSt(5, 'ok');
+  msg(5, items.length ? '제출 ' + items.length + '건 (학번 ' + (r.data.studentId || '') + ')' : '아직 제출한 기록이 없습니다. 4번에서 제출해 보세요.');
+}
+
+/* ---------- 1. 연결 확인 ---------- */
+async function doPing() {
+  busy.ping = true; refresh(); setSt(1, 'run'); msg(1, '확인하는 중입니다.');
+  const r = await call('ping');
+  busy.ping = false; refresh();
+  if (!r.ok) { setSt(1, 'bad'); msg(1, errText(r.code, r.message), 'bad'); return; }
+  setSt(1, 'ok');
+  msg(1, '연결됨. 응답 ' + r.ms + 'ms, 서버 버전 ' + (r.data.version ?? '?') + ', 서버 시각 ' + fmtTime(r.data.serverTime), 'ok');
+}
+
+/* ---------- 7. 부하 시험 ---------- */
+function stats(results) {
+  const ok = results.filter(r => r.ok).length;
+  const ms = results.map(r => r.totalMs || 0).sort((a, b) => a - b);
+  const avg = ms.length ? Math.round(ms.reduce((a, b) => a + b, 0) / ms.length) : 0;
+  const p95 = ms.length ? ms[Math.max(0, Math.ceil(ms.length * 0.95) - 1)] : 0;
+  const max = ms.length ? ms[ms.length - 1] : 0;
+  const retries = results.reduce((a, r) => a + (r.retries || 0), 0);
+  const codes = {};
+  results.forEach(r => { if (!r.ok) codes[r.code] = (codes[r.code] || 0) + 1; });
+  return { n: results.length, ok, fail: results.length - ok, avg, p95, max, retries, codes };
+}
+function statText(title, s, wall) {
+  const c = Object.keys(s.codes).map(k => k + ' ' + s.codes[k]).join(', ') || '없음';
+  return title + '\n요청 ' + s.n + ', 성공 ' + s.ok + ', 실패 ' + s.fail + ', 재시도 ' + s.retries +
+    '\n응답 ms (재시도 포함): 평균 ' + s.avg + ', p95 ' + s.p95 + ', 최대 ' + s.max + ', 전체 소요 ' + wall +
+    '\n오류 코드: ' + c;
+}
+function loadN() { const n = parseInt($('ln').value, 10); return Math.min(50, Math.max(1, isNaN(n) ? CONFIG.LOAD_TEST_N : n)); }
+async function loadPing() {
+  const n = loadN();
+  busy.load = true; refresh(); $('lres').textContent = '연결 확인 ' + n + '회 동시 요청 중입니다.';
+  const t0 = performance.now();
+  const res = await Promise.all(Array.from({ length: n }, () => call('ping', {}, { quiet: true })));
+  const wall = Math.round(performance.now() - t0);
+  const s = stats(res);
+  $('lres').textContent = statText('[연결 확인 ×' + n + ']', s, wall);
+  logDiag('부하: ping ×' + n + ' (성공 ' + s.ok + ', 재시도 ' + s.retries + ', p95 ' + s.p95 + ')', s.fail === 0, s.avg, Object.keys(s.codes).join(','));
+  busy.load = false; refresh();
+}
+async function loadSubmit() {
+  const n = loadN();
+  if (!idToken || !(me && me.studentId)) { $('lres').textContent = '로그인하고 학번을 연결한 뒤에 할 수 있습니다. 선생님용 시험 학번을 쓰세요.'; return; }
+  if (!confirm('학번 ' + me.studentId + '(으)로 시험용 HTML을 ' + n + '번 제출합니다. 드라이브에 파일 ' + n + '개가 생깁니다. 계속할까요?')) return;
+  busy.load = true; refresh(); $('lres').textContent = '제출 ' + n + '회를 0~5초 간격으로 보내는 중입니다.';
+  const t0 = performance.now();
+  const res = await Promise.all(Array.from({ length: n }, async (_, i) => {
+    await sleep(Math.random() * 5000);
+    const html = '<!DOCTYPE html><html><head><title>load test</title></head><body>' + (i + 1) + '</body></html>';
+    return call('submit', { html, requestId: newRequestId() }, { quiet: true });
+  }));
+  const wall = Math.round(performance.now() - t0);
+  const s = stats(res);
+  $('lres').textContent = statText('[제출 ×' + n + ']', s, wall);
+  logDiag('부하: submit ×' + n + ' (성공 ' + s.ok + ', 재시도 ' + s.retries + ', p95 ' + s.p95 + ')', s.fail === 0, s.avg, Object.keys(s.codes).join(','));
+  busy.load = false; refresh();
+}
+
+/* ---------- 버튼 상태 ---------- */
+function refresh() {
+  const bound = !!(me && me.studentId);
+  $('bPing').disabled = !cfgOk || busy.ping;
+  $('bBind').disabled = !cfgOk || !idToken || !me || bound || busy.bind;
+  $('bSubmit').disabled = !cfgOk || !idToken || !htmlValid() || busy.submit;
+  $('bList').disabled = !cfgOk || !idToken || busy.list;
+  $('bLPing').disabled = !cfgOk || busy.load;
+  $('bLSub').disabled = !cfgOk || !idToken || !bound || busy.load;
+}
+
+/* ---------- 시작 ---------- */
+$('bPing').addEventListener('click', doPing);
+$('bBind').addEventListener('click', doBind);
+$('bSubmit').addEventListener('click', doSubmit);
+$('bList').addEventListener('click', doList);
+$('bCopy').addEventListener('click', copyDiag);
+$('bOut').addEventListener('click', () => { logDiag('로그아웃', true, null, ''); signedOut(''); });
+$('bLPing').addEventListener('click', loadPing);
+$('bLSub').addEventListener('click', loadSubmit);
+$('html').addEventListener('input', () => { clearTimeout(checkHtml.t); checkHtml.t = setTimeout(checkHtml, 150); });
+$('sid').addEventListener('input', e => { const v = e.target.value.replace(/\D/g, ''); if (v !== e.target.value) e.target.value = v; });
+$('ln').value = Math.min(50, CONFIG.LOAD_TEST_N);
+function teacherMode() { $('c7').hidden = location.hash !== '#teacher'; }
+addEventListener('hashchange', teacherMode); teacherMode();
+addEventListener('online', renderEnv); addEventListener('offline', renderEnv);
+if (!cfgOk) $('cfgWarn').hidden = false;
+setTimeout(() => { if (gisState === '로드 중') gisFail(); }, 15000);
+renderGBtn(); renderEnv(); checkHtml(); refresh();
+</script>
+<script src="https://accounts.google.com/gsi/client" async defer onload="gisReady()" onerror="gisFail()"></script>
+</body>
+</html>
