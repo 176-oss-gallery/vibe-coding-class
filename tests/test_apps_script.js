@@ -838,6 +838,58 @@ test('관리자 목록: 학번·이름으로 찾기, 제출 수·최근 제출, 
   eq(J(G.adminRows(accounts, subs, '없는사람', [])).rows, []);
 });
 
+test('관리자 zip: 학번마다 최신 버전만, 반 단위, 파일 ID 없는 행 제외', () => {
+  const subs = [
+    { id: '31040', version: 1, fileId: 'f1' }, { id: '31040', version: 3, fileId: 'f3' }, { id: '31040', version: 2, fileId: 'f2' },
+    { id: '31001', version: 1, fileId: 'g1' }, { id: '21005', version: 1, fileId: 'h1' },
+    { id: '31002', version: 1, fileId: '' }, { id: 'bad', version: 1, fileId: 'x' }
+  ];
+  eq(J(G.adminLatest(subs, '310')).map((x) => [x.id, x.version, x.fileId, x.name]),
+    [['31001', 1, 'g1', '31001_v1.html'], ['31040', 3, 'f3', '31040_v3.html']]);
+  eq(J(G.adminLatest(subs, '')).map((x) => x.id), ['21005', '31001', '31040'], '전체');
+  const deps = {
+    readSubmissions: () => subs,
+    zipFiles: (items) => { deps.got = items; return { b64: 'UEsDBA==' }; }
+  };
+  let r = J(G.adminHandle(deps, 'classes', ''));
+  eq(r.classes.map((c) => [c.key, c.label, c.count]), [['210', '2학년 10반', 1], ['310', '3학년 10반', 2]]);
+  r = J(G.adminHandle(deps, 'zip', '310'));
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(r.name, 'submissions_310.zip');
+  assert.strictEqual(r.count, 2);
+  eq(deps.got, [{ name: '31001_v1.html', fileId: 'g1' }, { name: '31040_v3.html', fileId: 'f3' }]);
+  assert.strictEqual(J(G.adminHandle(deps, 'zip', '399')).code, 'BAD_REQUEST');
+  assert.strictEqual(J(G.adminHandle(deps, 'zip', '../x')).code, 'BAD_REQUEST');
+  assert.strictEqual(J(G.adminHandle(deps, 'zip', '110')).code, 'NOT_FOUND');
+  deps.zipFiles = () => ({ b64: 'A'.repeat(G.ADMIN_ZIP_MAX_B64 + 1) });
+  assert.strictEqual(J(G.adminHandle(deps, 'zip', '310')).code, 'TOO_BIG');
+});
+
+test('관리자 비밀번호: 맞으면 통과, 5번 틀리면 잠김, 설정이 없으면 거부, 맞아도 잠긴 동안은 거부', () => {
+  let fails = 0, pw = 'teacher-PW-9';
+  const deps = { getAdminPassword: () => pw, getFails: () => fails, putFails: (n) => { fails = n; }, clearFails: () => { fails = 0; } };
+  assert.strictEqual(G.adminPasswordCheck(deps, 'nope'), 'WRONG');
+  assert.strictEqual(G.adminPasswordCheck(deps, 'teacher-PW-9'), 'OK');
+  assert.strictEqual(fails, 0, '성공하면 실패 횟수 초기화');
+  for (let i = 0; i < 5; i++) assert.strictEqual(G.adminPasswordCheck(deps, 'bad' + i), 'WRONG');
+  assert.strictEqual(G.adminPasswordCheck(deps, 'teacher-PW-9'), 'LOCKED');
+  fails = 0;
+  for (const bad of [undefined, null, 5, {}, 'x'.repeat(500), '']) { fails = 0; assert.strictEqual(G.adminPasswordCheck(deps, bad), 'WRONG'); }
+  pw = '';
+  assert.strictEqual(G.adminPasswordCheck(deps, ''), 'NONE', '설정 없으면 빈 비밀번호도 거부');
+});
+
+test('관리자 화면: 스크립트 문법이 맞고 서버 호출 이름이 실제 함수와 맞음', () => {
+  const m = /<script>([\s\S]*)<\/script>/.exec(G.ADMIN_HTML);
+  assert.ok(m, '스크립트 없음');
+  new vm.Script(m[1]); // 문법 오류면 여기서 던짐
+  for (const fn of ['adminInfo', 'adminList', 'adminReset', 'adminClasses', 'adminZip']) {
+    assert.strictEqual(typeof G[fn], 'function', fn);
+    assert.ok(G.ADMIN_HTML.includes('.' + fn + '('), '화면이 ' + fn + ' 를 부르지 않음');
+  }
+  assert.ok(!/<script[^>]+src=|https?:\/\//.test(G.ADMIN_HTML), '외부 요청 금지');
+});
+
 test('관리자 초기화: 비밀번호=학번, 잠금 해제, 없는 학번·잘못된 형식 거부', () => {
   const { deps, st } = pwDeps();
   pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });

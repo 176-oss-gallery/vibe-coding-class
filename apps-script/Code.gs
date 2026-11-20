@@ -751,8 +751,11 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  // ?admin=1 → 선생님 관리자 화면 (스크립트 주인 학교 계정으로 열었을 때만)
-  if (e && e.parameter && e.parameter.admin) return adminPage_();
+  // ?admin=<주소 열쇠> → 선생님 관리자 화면. 열쇠는 스크립트 속성 ADMIN_KEY (없으면 1). 틀리면 평소와 같은 응답만 준다.
+  if (e && e.parameter && e.parameter.admin) {
+    var key = String(PropertiesService.getScriptProperties().getProperty('ADMIN_KEY') || '1');
+    if (safeEqual(String(e.parameter.admin), key)) return adminPage_();
+  }
   return jsonOut_(ok_({ serverTime: new Date().toISOString(), version: VERSION }));
 }
 
@@ -760,6 +763,36 @@ function doGet(e) {
 // 열 수 있는 사람: 스크립트 주인(배포한 선생님) + 스크립트 속성 ADMIN_EMAILS(쉼표로 구분)에 적은 같은 학교 계정.
 // 학생·다른 계정·로그인 안 한 사람은 이메일이 같지 않거나 빈칸이므로 거부된다.
 var ADMIN_LIST_MAX = 300;
+var ADMIN_ZIP_MAX_B64 = 30 * 1024 * 1024; // 한 번에 내려받는 zip 상한(문자 수). 반 하나는 훨씬 작음
+var ADMIN_FAIL_MAX = 5, ADMIN_FAIL_SEC = 300;
+
+// 순수: 학번마다 가장 높은 버전 하나만. classKey 가 비면 전체, 아니면 학번 앞 3자리(학년+반)가 같은 것만
+function adminLatest(submissions, classKey) {
+  var best = {};
+  (submissions || []).forEach(function (r) {
+    var id = String(r.id).trim();
+    if (!validateStudentId(id) || !String(r.fileId || '').trim()) return;
+    if (classKey && id.slice(0, 3) !== classKey) return;
+    var v = Number(r.version);
+    if (!isFinite(v)) return;
+    if (!best[id] || v > best[id].version) best[id] = { id: id, version: v, fileId: String(r.fileId).trim() };
+  });
+  return Object.keys(best).sort().map(function (id) {
+    var b = best[id];
+    return { id: id, version: b.version, fileId: b.fileId, name: id + '_v' + b.version + '.html' };
+  });
+}
+
+// 순수(deps 주입): 관리자 비밀번호 확인 (같은 학교 계정이 아닌 선생님용). → 'OK' | 'WRONG' | 'LOCKED' | 'NONE'
+// deps: getAdminPassword(), getFails(), putFails(n), clearFails(). 5번 틀리면 5분 잠김.
+function adminPasswordCheck(deps, pw) {
+  var real = String(deps.getAdminPassword() || '');
+  if (!real) return 'NONE';
+  if (deps.getFails() >= ADMIN_FAIL_MAX) return 'LOCKED';
+  if (typeof pw === 'string' && pw.length <= 200 && safeEqual(pw, real)) { deps.clearFails(); return 'OK'; }
+  deps.putFails(deps.getFails() + 1);
+  return 'WRONG';
+}
 
 // 순수: 관리자 목록 행 만들기. query 는 학번 일부 또는 이름 일부(공백 무시)
 function adminRows(accounts, submissions, query, lockedIds) {
@@ -798,6 +831,22 @@ function adminHandle(deps, action, arg) {
     var locked = deps.lockedIds(accounts.map(function (a) { return a.id; })) || [];
     return ok_(adminRows(accounts, deps.readSubmissions(), arg, locked));
   }
+  if (action === 'classes') {
+    var latestAll = adminLatest(deps.readSubmissions(), '');
+    var by = {};
+    latestAll.forEach(function (x) { var k = x.id.slice(0, 3); by[k] = (by[k] || 0) + 1; });
+    return ok_({ classes: Object.keys(by).sort().map(function (k) { return { key: k, label: Number(k[0]) + '학년 ' + Number(k.slice(1)) + '반', count: by[k] }; }) });
+  }
+  if (action === 'zip') {
+    var key = String(arg === null || arg === undefined ? '' : arg);
+    if (!/^[1-3](0[1-9]|1[0-6])$/.test(key)) return fail_('BAD_REQUEST');
+    var items = adminLatest(deps.readSubmissions(), key);
+    if (!items.length) return fail_('NOT_FOUND');
+    var z = deps.zipFiles(items.map(function (x) { return { name: x.name, fileId: x.fileId }; }));
+    if (!z || typeof z.b64 !== 'string') return fail_('SERVER_ERROR');
+    if (z.b64.length > ADMIN_ZIP_MAX_B64) return fail_('TOO_BIG');
+    return ok_({ name: 'submissions_' + key + '.zip', count: items.length, b64: z.b64 });
+  }
   if (action === 'reset') {
     var sid = String(arg === null || arg === undefined ? '' : arg).trim();
     if (!validateStudentId(sid)) return fail_('BAD_REQUEST');
@@ -827,26 +876,58 @@ function isAdmin_() {
   return extra.indexOf(me) >= 0;
 }
 
+function adminPwSet_() {
+  return !!String(PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD') || '');
+}
+
+// 관리자 확인: 같은 학교 선생님 계정이면 바로 통과, 아니면 관리자 비밀번호(스크립트 속성 ADMIN_PASSWORD)
+function adminCheck_(pw) {
+  if (isAdmin_()) return;
+  var cache = CacheService.getScriptCache();
+  var r = adminPasswordCheck({
+    getAdminPassword: function () { return PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD'); },
+    getFails: function () { return Number(cache.get('af:admin')) || 0; },
+    putFails: function (n) { cache.put('af:admin', String(n), ADMIN_FAIL_SEC); },
+    clearFails: function () { cache.remove('af:admin'); }
+  }, pw);
+  if (r === 'OK') return;
+  if (r === 'LOCKED') throw new Error('비밀번호를 여러 번 틀려서 5분 동안 잠겼어요.');
+  if (r === 'WRONG') throw new Error('관리자 비밀번호가 맞지 않아요.');
+  throw new Error('관리자만 쓸 수 있어요.');
+}
+
 // google.script.run 으로 부르는 함수 (이름 끝에 _ 가 없어야 호출 가능). 매번 권한 확인
-function adminList(query) {
-  if (!isAdmin_()) throw new Error('관리자만 쓸 수 있어요.');
+function adminInfo() {
+  return { open: isAdmin_() }; // true 면 비밀번호 없이 열림(같은 학교 선생님 계정)
+}
+
+function adminList(query, pw) {
+  adminCheck_(pw);
   return adminHandle(makeRealDeps(), 'list', typeof query === 'string' ? query.slice(0, 40) : '');
 }
 
-function adminReset(studentId) {
-  if (!isAdmin_()) throw new Error('관리자만 쓸 수 있어요.');
+function adminReset(studentId, pw) {
+  adminCheck_(pw);
   return adminHandle(makeRealDeps(), 'reset', studentId);
 }
 
+function adminClasses(pw) {
+  adminCheck_(pw);
+  return adminHandle(makeRealDeps(), 'classes', '');
+}
+
+function adminZip(classKey, pw) {
+  adminCheck_(pw);
+  return adminHandle(makeRealDeps(), 'zip', classKey);
+}
+
+// 열 수 있는 사람: 같은 학교 선생님 계정, 또는 ADMIN_PASSWORD 를 설정해 둔 경우 그 비밀번호를 아는 사람.
+// 둘 다 아니면 화면이 있다는 것도 알 수 없게 평소 응답만 준다.
 function adminPage_() {
-  if (!isAdmin_()) {
-    return HtmlService.createHtmlOutput(ADMIN_DENIED_HTML).setTitle('관리자 화면');
-  }
+  if (!isAdmin_() && !adminPwSet_()) return jsonOut_(ok_({ serverTime: new Date().toISOString(), version: VERSION }));
   return HtmlService.createHtmlOutput(ADMIN_HTML).setTitle('제출 시험 관리자')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
-
-var ADMIN_DENIED_HTML = '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><style>body{font-family:"Noto Sans KR","Malgun Gothic",system-ui,sans-serif;padding:32px 16px;color:#1f2430;background:#f6f7fb}p{max-width:520px;margin:0 auto;background:#fff;border:1px solid #d9dce6;border-radius:10px;padding:20px;line-height:1.6}</style></head><body><p>관리자 화면은 이 웹앱을 배포한 선생님 계정으로만 열 수 있어요. 여러 계정에 로그인되어 있으면 주소의 <b>/macros/</b> 앞에 <b>/a/학교도메인</b>이 들어간 주소로 열어 보세요.</p></body></html>';
 
 var ADMIN_HTML = [
 '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><base target="_top">',
@@ -863,15 +944,22 @@ var ADMIN_HTML = [
 '.wrap{background:var(--card);border:1px solid var(--bd);border-radius:10px;overflow-x:auto}',
 'table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:9px 10px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}th{color:var(--mut);font-weight:600;background:var(--pri2)}',
 'td.n{text-align:right}.tag{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--bd)}.tag.r{color:var(--warn);border-color:var(--warn)}.tag.l{color:var(--bad);border-color:var(--bad)}',
-'.empty{padding:24px;text-align:center;color:var(--mut)}',
+'.empty{padding:24px;text-align:center;color:var(--mut)}[hidden]{display:none!important}',
+'select{padding:8px 10px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit;font-size:15px;min-height:36px}',
 '</style></head><body><main>',
 '<h1>제출 시험 관리자</h1>',
 '<p class="sub">학번이나 이름으로 찾고, 비밀번호를 잊었거나 잠긴 학생을 초기화합니다. 초기화하면 그 학생의 비밀번호는 <b>학번</b>이 되고 잠금도 풀립니다.</p>',
+'<div class="bar" id="pwbar" hidden><label for="pw" class="sub" style="margin:0">관리자 비밀번호</label><input id="pw" type="password" autocomplete="off"><button class="p" id="pwgo">들어가기</button></div>',
+'<div id="pwmsg" role="status" aria-live="polite" class="sub"></div>',
+'<div id="app" hidden>',
+'<div class="bar"><label for="cls" class="sub" style="margin:0">갤러리용 내려받기</label><select id="cls" aria-label="반 선택"></select><button class="p" id="dl">이 반 내려받기</button><button id="dlall">모든 반 차례로 내려받기</button></div>',
+'<p class="sub" style="margin-top:-4px">학생마다 <b>가장 최근에 낸 작품</b>만 담긴 zip 파일이 내려받아집니다. 이 zip을 풀지 말고 <code>python tools/ingest.py 내려받은.zip</code>에 넣으면 됩니다.</p>',
 '<div class="bar"><label for="q" class="sub" style="margin:0">찾기</label><input id="q" type="search" placeholder="학번 또는 이름 (비우면 전체)" autocomplete="off"><button class="p" id="go">조회</button></div>',
 '<div id="msg" role="status" aria-live="polite"></div>',
 '<div class="wrap"><table><thead><tr><th>학번</th><th>이름</th><th>등록</th><th>제출</th><th>최근 제출</th><th>상태</th><th></th></tr></thead><tbody id="tb"><tr><td colspan="7" class="empty">불러오는 중…</td></tr></tbody></table></div>',
+'</div>',
 '</main><script>',
-'var $=function(id){return document.getElementById(id)};',
+'var $=function(id){return document.getElementById(id)};var PW="";var CLS=[];',
 'function fmt(iso){if(!iso)return "-";var d=new Date(iso);if(isNaN(d))return "-";var p=function(n){return (n<10?"0":"")+n};return (d.getMonth()+1)+"/"+d.getDate()+" "+p(d.getHours())+":"+p(d.getMinutes())}',
 'function msg(t,cls){var m=$("msg");m.textContent=t;m.className=cls||""}',
 'function td(text,cls){var c=document.createElement("td");c.textContent=text;if(cls)c.className=cls;return c}',
@@ -881,11 +969,20 @@ var ADMIN_HTML = [
 '  var st=document.createElement("td");var tags=[];if(r.reset)tags.push(["초기화됨(비밀번호=학번)","r"]);if(r.locked)tags.push(["잠김","l"]);if(!tags.length)tags.push(["정상",""]);tags.forEach(function(t){var s=document.createElement("span");s.className="tag "+t[1];s.textContent=t[0];st.appendChild(s);st.appendChild(document.createTextNode(" "))});tr.appendChild(st);',
 '  var bc=document.createElement("td");var b=document.createElement("button");b.textContent="초기화";b.setAttribute("aria-label",r.id+" "+r.name+" 초기화");b.onclick=function(){reset(r,b)};bc.appendChild(b);tr.appendChild(bc);tb.appendChild(tr)});',
 ' var info=res.shown<res.total&&!$("q").value.trim()?" (앞에서 "+res.shown+"명만 표시)":"";msg("등록 "+res.total+"명 중 "+res.rows.length+"명"+info,"")}',
-'function load(){msg("불러오는 중…","");$("go").disabled=true;google.script.run.withSuccessHandler(function(r){$("go").disabled=false;render(r)}).withFailureHandler(function(e){$("go").disabled=false;msg("불러오지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminList($("q").value)}',
+'function load(){msg("불러오는 중…","");$("go").disabled=true;google.script.run.withSuccessHandler(function(r){$("go").disabled=false;render(r)}).withFailureHandler(function(e){$("go").disabled=false;msg("불러오지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminList($("q").value,PW)}',
 'function reset(r,b){if(!confirm(r.id+" "+r.name+" 학생의 비밀번호를 학번("+r.id+")으로 초기화할까요?\\n잠금도 풀리고, 지금 로그인된 화면은 끊깁니다."))return;b.disabled=true;msg(r.id+" 초기화하는 중…","");',
 ' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){msg(r.id+" "+r.name+": 초기화했어요. 학생은 학번으로 로그인하면 됩니다.","ok");setTimeout(load,600)}else{b.disabled=false;msg("초기화하지 못했어요: "+(res&&res.message||"오류"),"bad")}})',
-' .withFailureHandler(function(e){b.disabled=false;msg("초기화하지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminReset(r.id)}',
-'$("go").onclick=load;$("q").addEventListener("keydown",function(e){if(e.key==="Enter")load()});load();',
+' .withFailureHandler(function(e){b.disabled=false;msg("초기화하지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminReset(r.id,PW)}',
+'function saveZip(name,b64){var bin=atob(b64),n=bin.length,u=new Uint8Array(n);for(var i=0;i<n;i++)u[i]=bin.charCodeAt(i);var url=URL.createObjectURL(new Blob([u],{type:"application/zip"}));var a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(function(){URL.revokeObjectURL(url)},60000)}',
+'function loadClasses(){google.script.run.withSuccessHandler(function(r){var sel=$("cls");sel.textContent="";CLS=(r&&r.ok&&r.classes)||[];CLS.forEach(function(c){var o=document.createElement("option");o.value=c.key;o.textContent=c.label+" ("+c.count+"명)";sel.appendChild(o)});if(!CLS.length){var o=document.createElement("option");o.textContent="제출한 반이 없어요";sel.appendChild(o)}$("dl").disabled=$("dlall").disabled=!CLS.length}).withFailureHandler(function(){}).adminClasses(PW)}',
+'function dlOne(c,next){msg(c.label+" 만드는 중…","");google.script.run.withSuccessHandler(function(r){if(r&&r.ok){saveZip(r.name,r.b64);msg(c.label+": "+r.count+"명 작품을 내려받았어요 ("+r.name+")","ok");if(next)setTimeout(next,1200);else $("dl").disabled=$("dlall").disabled=false}else{msg(c.label+" 실패: "+(r&&r.message||"오류"),"bad");$("dl").disabled=$("dlall").disabled=false}}).withFailureHandler(function(e){msg(c.label+" 실패: "+(e&&e.message||"오류"),"bad");$("dl").disabled=$("dlall").disabled=false}).adminZip(c.key,PW)}',
+'$("dl").onclick=function(){var k=$("cls").value;var c=CLS.filter(function(x){return x.key===k})[0];if(!c)return;$("dl").disabled=$("dlall").disabled=true;dlOne(c,null)};',
+'$("dlall").onclick=function(){if(!CLS.length||!confirm(CLS.length+"개 반을 차례로 내려받습니다. 크롬이 여러 파일 내려받기를 물으면 허용해 주세요."))return;$("dl").disabled=$("dlall").disabled=true;var i=0;(function step(){var c=CLS[i++];if(!c){$("dl").disabled=$("dlall").disabled=false;msg("모든 반을 내려받았어요.","ok");return}dlOne(c,step)})()};',
+'$("go").onclick=load;$("q").addEventListener("keydown",function(e){if(e.key==="Enter")load()});',
+'function enter(){$("pwbar").hidden=true;$("pwmsg").textContent="";$("app").hidden=false;load();loadClasses()}',
+'function tryPw(){PW=$("pw").value;$("pwmsg").textContent="확인하는 중…";google.script.run.withSuccessHandler(function(r){if(r&&r.ok)enter();else $("pwmsg").textContent="들어가지 못했어요."}).withFailureHandler(function(e){PW="";$("pwmsg").textContent=e&&e.message||"들어가지 못했어요."}).adminClasses(PW)}',
+'$("pwgo").onclick=tryPw;$("pw").addEventListener("keydown",function(e){if(e.key==="Enter")tryPw()});',
+'google.script.run.withSuccessHandler(function(i){if(i&&i.open)enter();else{$("pwbar").hidden=false;$("pw").focus()}}).withFailureHandler(function(){$("pwbar").hidden=false}).adminInfo();',
 '</script></body></html>'
 ].join('\n');
 
@@ -938,7 +1035,7 @@ function makeRealDeps() {
     readSubmissions: function () {
       return dataRows_('Submissions').filter(function (r) { return String(r[1]).trim(); }).map(function (r) {
         return { at: r[0], id: String(r[1]).trim(), email: String(r[2]).trim().toLowerCase(), version: Number(r[3]),
-          size: Number(r[5]), sha256: String(r[6]), requestId: String(r[7] === null || r[7] === undefined ? '' : r[7]).trim() };
+          fileId: String(r[4] || '').trim(), size: Number(r[5]), sha256: String(r[6]), requestId: String(r[7] === null || r[7] === undefined ? '' : r[7]).trim() };
       });
     },
     saveFile: function (fileName, text) {
@@ -949,6 +1046,11 @@ function makeRealDeps() {
     },
     renameFile: function (fileId, name) {
       DriveApp.getFileById(fileId).setName(name);
+    },
+    // 관리자: 드라이브 파일들을 zip 하나로 묶어 base64 로 돌려줌. items = [{ name, fileId }]
+    zipFiles: function (items) {
+      var blobs = items.map(function (it) { return DriveApp.getFileById(it.fileId).getBlob().setName(it.name); });
+      return { b64: Utilities.base64Encode(Utilities.zip(blobs, 'submissions.zip').getBytes()) };
     },
     // 관리자: 초기화 표시(Y)와 시각을 시트에 씀. 학번이 없으면 false
     markReset: function (id, at) {
