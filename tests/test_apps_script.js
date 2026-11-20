@@ -310,6 +310,7 @@ function makeDeps(over) {
       ? Object.assign({ ok: true }, TOKENS[tok], { email: TOKENS[tok].email.toLowerCase() })
       : { ok: false, code: 'TOKEN_INVALID' }),
     readRoster: () => Object.assign({}, st.roster),
+    upsertRoster: (id, name) => { st.roster[id] = name; st.rosterAuto = (st.rosterAuto || 0) + 1; },
     readBindings: () => st.bindings.map((r) => Object.assign({}, r)),
     appendBinding: (row) => { st.bindings.push(Object.assign({}, row)); },
     readSubmissions: () => st.subs.map((r) => Object.assign({}, r)),
@@ -738,6 +739,31 @@ function teacherReset(st, id, agoMs) {
   a.reset = true;
   a.resetAt = new Date(st.t - (agoMs || 0));
 }
+
+test('명단 없이 시작(roster_required=FALSE): 처음 등록하면 명단에 자동 추가, 이후엔 그 이름과 같아야 함', () => {
+  const { deps, st } = pwDeps();
+  st.cfg.roster_required = false;
+  st.roster = {};
+  let r = pcall(deps, { action: 'register', studentId: '20315', name: '김 하늘', password: 'sky-PW-1234' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(st.roster['20315'], '김 하늘', '명단에 자동 추가');
+  assert.strictEqual(st.rosterAuto, 1);
+  // 같은 학번 다시 등록은 기존처럼 거부, 명단 추가도 다시 안 함
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '20315', name: '김하늘', password: 'sea-PW-5678' }).code, 'ALREADY_REGISTERED');
+  assert.strictEqual(st.rosterAuto, 1);
+  // 명단에 이름이 이미 있으면 그 이름과 같아야 함 (자동 추가 없음)
+  st.roster['20316'] = '이바다';
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '20316', name: '이바닥', password: 'sea-PW-5678' }).code, 'NAME_MISMATCH');
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '20316', name: '이바다', password: 'sea-PW-5678' }).ok, true);
+  assert.strictEqual(st.rosterAuto, 1);
+  // 명단에 학번만 있고 이름이 빈 경우는 이름을 채움
+  st.roster['20317'] = '';
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '20317', name: '박구름', password: 'sun-PW-2468' }).ok, true);
+  assert.strictEqual(st.roster['20317'], '박구름');
+  // 학번 형식은 여전히 검사
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '41701', name: '누구', password: 'sun-PW-2468' }).code, 'BAD_REQUEST');
+  assert.strictEqual(st.locks, st.releases);
+});
 
 test('설정 읽기: auth_mode 기본 password, 잘못된 값도 password', () => {
   assert.strictEqual(G.parseConfig([]).auth_mode, 'password');

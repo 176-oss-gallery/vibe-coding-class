@@ -10,6 +10,7 @@
  *   verifyToken(idToken, cfg)  → { ok:true, email, domain, displayName }
  *                               | { ok:false, code, message? }   (code: TOKEN_INVALID | DOMAIN_NOT_ALLOWED | SERVER_ERROR)
  *   readRoster()               → { '<학번>': '<이름>', ... }   (일반 객체)
+ *   upsertRoster(id, name)     → void (roster_required=FALSE 일 때 처음 등록하면 명단에 학번·이름 채움, 3열 '자동')
  *   readBindings()             → [{ id, name, email, displayName, mismatch }]   (mismatch: boolean)
  *   appendBinding(row)         → void; row = { id, name, email, displayName, mismatch:boolean, at:Date }
  *   readSubmissions()          → [{ at:Date|string, id, email, version:number, size:number, sha256, requestId }]
@@ -65,7 +66,7 @@ var ID_RE = /^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-3]\d|40)$/; // tools/common.py �
 var ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
 
 var SHEETS = {
-  Roster: ['학번', '이름'],
+  Roster: ['학번', '이름', '추가'],
   Bindings: ['학번', '이름', '이메일', '계정표시이름', '이름불일치', '연결시각', '계정종류'],
   Submissions: ['시각', '학번', '이메일', '버전', '드라이브파일ID', '크기', 'sha256', '요청ID'],
   Config: ['키', '값'],
@@ -76,7 +77,7 @@ var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8], Account
 
 var CONFIG_DEFAULTS = [
   ['auth_mode', 'password'],   // password | google
-  ['roster_required', 'TRUE'],
+  ['roster_required', 'FALSE'], // FALSE = 명단 없이 시작, 처음 등록할 때 명단에 자동 추가 / TRUE = 명단에 있는 학번만
   ['allowed_domains', ''],
   ['allow_personal', 'FALSE'], // TRUE면 allowed_domains가 있어도 개인 구글 계정(gmail 등) 허용. 대신 이름이 명단과 같아야 연결됨
   ['max_html_bytes', 2097152],
@@ -561,6 +562,8 @@ function doRegister_(deps, cfg, req, sid, pepper) {
     if (normName_(rosterName) && normName_(rosterName) !== normName_(name)) return fail_('NAME_MISMATCH', MSG_NAME_NOT_ROSTER);
     if (findAccount_(deps.readAccounts() || [], sid)) return fail_('ALREADY_REGISTERED');
     deps.appendAccount({ id: sid, name: name, hash: hash, salt: salt, at: deps.now() });
+    // 명단 없이 시작하는 경우(roster_required=FALSE): 처음 등록할 때 명단에 학번·이름을 채움
+    if (!cfg.roster_required && !normName_(rosterName)) deps.upsertRoster(sid, name);
   } finally {
     deps.releaseLock();
   }
@@ -751,6 +754,19 @@ function makeRealDeps() {
         if (validateStudentId(id)) out[id] = String(r[1] === null || r[1] === undefined ? '' : r[1]).trim();
       });
       return out;
+    },
+    // 명단에 학번이 있으면(이름 빈칸) 이름을 채우고, 없으면 새 행 추가. 3열에 '자동' 표시
+    upsertRoster: function (id, name) {
+      var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Roster');
+      if (sh && sh.getLastRow() >= 2) {
+        var ids = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+        for (var i = 0; i < ids.length; i++) {
+          if (String(ids[i][0]).trim() !== String(id)) continue;
+          sh.getRange(i + 2, 2, 1, 2).setValues([[textCell_(name), '자동']]);
+          return;
+        }
+      }
+      appendRow_('Roster', [id, textCell_(name), '자동']);
     },
     readBindings: function () {
       return dataRows_('Bindings').filter(function (r) { return String(r[0]).trim(); }).map(function (r) {
