@@ -39,7 +39,7 @@ var ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
 
 var SHEETS = {
   Roster: ['학번', '이름'],
-  Bindings: ['학번', '이름', '이메일', '계정표시이름', '이름불일치', '연결시각'],
+  Bindings: ['학번', '이름', '이메일', '계정표시이름', '이름불일치', '연결시각', '계정종류'],
   Submissions: ['시각', '학번', '이메일', '버전', '드라이브파일ID', '크기', 'sha256', '요청ID'],
   Config: ['키', '값']
 };
@@ -49,6 +49,7 @@ var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8] };
 var CONFIG_DEFAULTS = [
   ['roster_required', 'TRUE'],
   ['allowed_domains', ''],
+  ['allow_personal', 'FALSE'], // TRUE면 allowed_domains가 있어도 개인 구글 계정(gmail 등) 허용. 대신 이름이 명단과 같아야 연결됨
   ['max_html_bytes', 2097152],
   ['session_open', 'TRUE'],
   ['submit_per_minute', 5]   // 계정당 1분 제출 상한. 부하 시험(T11) 때만 50 정도로 올린다
@@ -62,6 +63,7 @@ var MESSAGES = {
   ID_BOUND_TO_OTHER: '이 학번은 이미 다른 계정과 연결되어 있어요. 선생님께 알려 주세요.',
   EMAIL_BOUND_TO_OTHER_ID: '이 계정은 이미 다른 학번과 연결되어 있어요. 선생님께 알려 주세요.',
   NOT_BOUND: '먼저 학번을 연결해 주세요.',
+  NAME_MISMATCH: '개인 계정은 명단의 이름과 똑같이 입력해야 연결돼요. 이름을 확인하거나 학교 계정으로 로그인해 주세요.',
   TOO_LARGE: '파일이 너무 커요.',
   NOT_HTML: 'HTML 코드가 아닌 것 같아요. 전체 코드를 붙여 넣어 주세요.',
   SESSION_CLOSED: '지금은 제출 시간이 아니에요.',
@@ -148,7 +150,7 @@ function claimsDomain_(claims) {
   return at >= 0 ? email.slice(at + 1).toLowerCase() : '';
 }
 
-function checkClaims(claims, clientId, allowedDomains, nowSec) {
+function checkClaims(claims, clientId, allowedDomains, nowSec, allowPersonal) {
   if (!claims || typeof claims !== 'object') return 'TOKEN_INVALID';
   if (!clientId || String(claims.aud) !== String(clientId)) return 'TOKEN_INVALID';
   if (ISSUERS.indexOf(String(claims.iss)) < 0) return 'TOKEN_INVALID';
@@ -160,8 +162,11 @@ function checkClaims(claims, clientId, allowedDomains, nowSec) {
     .filter(function (d) { return d; });
   // 허용 목록이 있으면 Workspace 계정의 hd 만 인정 (이메일 도메인으로 대체하지 않음)
   var hd = claims.hd ? String(claims.hd).trim().toLowerCase() : '';
-  if (list.length && (!hd || list.indexOf(hd) < 0)) return 'DOMAIN_NOT_ALLOWED';
-  return null;
+  if (!list.length) return null;
+  if (hd && list.indexOf(hd) >= 0) return null;
+  // 개인 계정(hd 없음)은 allow_personal 일 때만. 다른 학교·회사 Workspace 계정(hd 다름)은 항상 거부
+  if (!hd && allowPersonal === true) return null;
+  return 'DOMAIN_NOT_ALLOWED';
 }
 
 // tokeninfo 호출 전 값싼 사전 검사. b64decodeFn(base64url 조각) → 디코드된 문자열 (예외 가능)
@@ -204,7 +209,7 @@ function parseBool_(v, def) {
 }
 
 function parseConfig(rows) {
-  var cfg = { roster_required: true, allowed_domains: [], max_html_bytes: 2097152, session_open: true, submit_per_minute: RATE_MAX };
+  var cfg = { roster_required: true, allowed_domains: [], max_html_bytes: 2097152, session_open: true, submit_per_minute: RATE_MAX, allow_personal: false };
   if (!rows || !rows.length) return cfg;
   for (var i = 1; i < rows.length; i++) {
     var r = rows[i] || [];
@@ -212,6 +217,7 @@ function parseConfig(rows) {
     var val = r[1];
     if (key === 'roster_required') cfg.roster_required = parseBool_(val, true);
     else if (key === 'session_open') cfg.session_open = parseBool_(val, true);
+    else if (key === 'allow_personal') cfg.allow_personal = parseBool_(val, false);
     else if (key === 'allowed_domains') {
       cfg.allowed_domains = String(val === null || val === undefined ? '' : val)
         .split(/[\s,;]+/).map(function (d) { return d.trim().toLowerCase().replace(/^@/, ''); })
@@ -396,9 +402,13 @@ function doBind_(deps, cfg, req, auth, email) {
     if (displayName && !namesMatch(name, displayName)) mismatch = true;
     // 명단 이름과는 공백만 무시하고 정확히 비교
     var rosterName = Object.prototype.hasOwnProperty.call(roster, sid) ? String(roster[sid] || '') : '';
-    if (normName_(rosterName) && normName_(rosterName) !== normName_(name)) mismatch = true;
+    var rosterDiffers = !!normName_(rosterName) && normName_(rosterName) !== normName_(name);
+    // 개인 계정은 학교가 신원을 보증하지 않으므로 명단 이름과 다르면 거부 (학교 계정은 표시만)
+    if (auth.personal && rosterDiffers) return fail_('NAME_MISMATCH');
+    if (rosterDiffers) mismatch = true;
 
-    deps.appendBinding({ id: sid, name: name, email: email, displayName: displayName, mismatch: mismatch, at: deps.now() });
+    deps.appendBinding({ id: sid, name: name, email: email, displayName: displayName, mismatch: mismatch,
+      at: deps.now(), personal: !!auth.personal });
     return ok_({ studentId: sid, name: name, nameMismatch: mismatch, alreadyBound: false });
   } finally {
     deps.releaseLock();
@@ -505,7 +515,7 @@ function makeRealDeps() {
     },
     appendBinding: function (row) {
       appendRow_('Bindings', [row.id, textCell_(row.name), textCell_(row.email), textCell_(row.displayName),
-        row.mismatch ? 'Y' : '', row.at]);
+        row.mismatch ? 'Y' : '', row.at, row.personal ? '개인' : '학교']);
     },
     readSubmissions: function () {
       return dataRows_('Submissions').filter(function (r) { return String(r[1]).trim(); }).map(function (r) {
@@ -602,9 +612,10 @@ function realVerifyToken_(token, cfg) {
     if (ttl > 0) cache.put(key, JSON.stringify(claims), ttl);
   }
   // 도메인은 설정 변경을 반영하도록 매번 검사
-  var code = checkClaims(claims, clientId, cfg.allowed_domains, nowSec);
+  var code = checkClaims(claims, clientId, cfg.allowed_domains, nowSec, cfg.allow_personal);
   if (code) return { ok: false, code: code };
-  return { ok: true, email: String(claims.email).toLowerCase(), domain: claimsDomain_(claims), displayName: String(claims.name || '') };
+  return { ok: true, email: String(claims.email).toLowerCase(), domain: claimsDomain_(claims),
+    displayName: String(claims.name || ''), personal: !claims.hd };
 }
 
 // 수식으로 해석되지 않도록 문자열 앞에 ' 추가

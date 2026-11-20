@@ -209,6 +209,16 @@ test('토큰 검사: 허용 도메인', () => {
   assert.strictEqual(G.checkClaims(claims({ email: 'a@gmail.com', hd: '' }), CID, [' ', ''], NOW), null);
 });
 
+test('개인 계정 허용(allow_personal)', () => {
+  const allow = ['school.kr'];
+  assert.strictEqual(G.checkClaims(claims({ email: 'a@gmail.com', hd: '' }), CID, allow, NOW, true), null, '개인 계정 통과');
+  assert.strictEqual(G.checkClaims(claims({ email: 'a@gmail.com', hd: '' }), CID, allow, NOW, false), 'DOMAIN_NOT_ALLOWED');
+  assert.strictEqual(G.checkClaims(claims({ email: 'a@gmail.com', hd: '' }), CID, allow, NOW, 'TRUE'), 'DOMAIN_NOT_ALLOWED', '불리언만 인정');
+  assert.strictEqual(G.checkClaims(claims({ email: 'a@other.kr', hd: 'other.kr' }), CID, allow, NOW, true), 'DOMAIN_NOT_ALLOWED', '다른 Workspace 는 거부');
+  assert.strictEqual(G.checkClaims(claims({ email: 'a@school.kr', hd: 'school.kr' }), CID, allow, NOW, true), null);
+  assert.strictEqual(G.checkClaims(claims({ aud: 'x', hd: '' }), CID, allow, NOW, true), 'TOKEN_INVALID', '토큰 검사는 그대로');
+});
+
 test('캐시 TTL', () => {
   assert.strictEqual(G.cacheTtl(NOW + 3600, NOW), 300);
   const t = G.cacheTtl(NOW + 100, NOW);
@@ -219,8 +229,10 @@ test('캐시 TTL', () => {
 });
 
 test('설정 읽기: 기본값', () => {
-  const d = { roster_required: true, allowed_domains: [], max_html_bytes: 2097152, session_open: true, submit_per_minute: 5 };
+  const d = { roster_required: true, allowed_domains: [], max_html_bytes: 2097152, session_open: true, submit_per_minute: 5, allow_personal: false };
   eq(G.parseConfig([]), d);
+  eq(G.parseConfig([['키', '값'], ['allow_personal', 'TRUE']]).allow_personal, true);
+  eq(G.parseConfig([['키', '값'], ['allow_personal', '모름']]).allow_personal, false);
   eq(G.parseConfig([['키', '값'], ['submit_per_minute', 'abc']]), d);
   eq(G.parseConfig([['키', '값'], ['submit_per_minute', '50']]).submit_per_minute, 50);
   eq(G.parseConfig([['키', '값'], ['submit_per_minute', 9999]]).submit_per_minute, 200);
@@ -273,10 +285,11 @@ test('다음 버전 번호(nextVersion)', () => {
 const TOKENS = {
   'eyJ.ALICE-SECRET-TOKEN.sig': { email: 'Alice@School.kr', domain: 'school.kr', displayName: '김하늘' },
   'eyJ.BOB-SECRET-TOKEN.sig': { email: 'bob@school.kr', domain: 'school.kr', displayName: '이바다' },
-  'eyJ.CAROL-SECRET-TOKEN.sig': { email: 'carol@school.kr', domain: 'school.kr', displayName: '박구름' }
+  'eyJ.CAROL-SECRET-TOKEN.sig': { email: 'carol@school.kr', domain: 'school.kr', displayName: '박구름' },
+  'eyJ.DAVE-SECRET-TOKEN.sig': { email: 'dave@gmail.com', domain: 'gmail.com', displayName: 'Dave', personal: true }
 };
 const ALL_SECRETS = Object.keys(TOKENS);
-const ALL_EMAILS = ['alice@school.kr', 'bob@school.kr', 'carol@school.kr'];
+const ALL_EMAILS = ['alice@school.kr', 'bob@school.kr', 'carol@school.kr', 'dave@gmail.com'];
 
 function makeDeps(over) {
   const st = {
@@ -322,7 +335,27 @@ function call(deps, obj, raw) {
   return out;
 }
 const A = 'eyJ.ALICE-SECRET-TOKEN.sig', B = 'eyJ.BOB-SECRET-TOKEN.sig', C = 'eyJ.CAROL-SECRET-TOKEN.sig';
+const D = 'eyJ.DAVE-SECRET-TOKEN.sig';
 const PAGE = '<!DOCTYPE html><html><body>게임</body></html>';
+
+test('bind: 개인 계정은 명단 이름이 같아야 연결, 계정종류 기록', () => {
+  const { deps, st } = makeDeps();
+  let r = call(deps, { action: 'bind', idToken: D, studentId: '10102', name: '이 바 다다' });
+  eq(r.code, 'NAME_MISMATCH');
+  assert.strictEqual(st.bindings.length, 0, '거부 시 행 없음');
+  assert.strictEqual(st.locks, st.releases, '잠금 해제');
+  r = call(deps, { action: 'bind', idToken: D, studentId: '10102', name: '이 바다' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(st.bindings[0].personal, true);
+  // 학교 계정은 이름이 달라도 표시만 하고 연결
+  r = call(deps, { action: 'bind', idToken: A, studentId: '10101', name: '김구름' });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.nameMismatch, true);
+  assert.strictEqual(st.bindings[1].personal, false);
+  // 개인 계정으로 연결된 학번은 학교 계정이 다시 가져갈 수 없음 (선생님이 행을 지워야 함)
+  r = call(deps, { action: 'bind', idToken: B, studentId: '10102', name: '이바다' });
+  eq(r.code, 'ID_BOUND_TO_OTHER');
+});
 
 test('ping', () => {
   const { deps } = makeDeps();
@@ -680,10 +713,11 @@ test('lab/index.html: 외부 스크립트는 GIS 하나뿐', () => {
   assert.deepStrictEqual(srcs, ['https://accounts.google.com/gsi/client']);
 });
 
-test('lab/index.html: CONFIG 자리표시자(YOUR_) 있음', () => {
-  assert.ok(/YOUR_/.test(LAB));
-  assert.ok(/GOOGLE_CLIENT_ID\s*:\s*'YOUR_/.test(LAB));
-  assert.ok(/WEB_APP_URL\s*:\s*'[^']*YOUR_/.test(LAB));
+test('lab/index.html: CONFIG 형식(자리표시자 또는 실제 값), 비밀 값 없음', () => {
+  assert.ok(/GOOGLE_CLIENT_ID\s*:\s*'(YOUR_CLIENT_ID|\d+-[a-z0-9]+)\.apps\.googleusercontent\.com'/.test(LAB));
+  assert.ok(/WEB_APP_URL\s*:\s*'https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec'/.test(LAB));
+  assert.ok(!/GOCSPX-/.test(LAB), '클라이언트 보안 비밀번호가 들어가면 안 됨');
+  assert.ok(!/GOCSPX-/.test(SRC));
 });
 
 test('lab/index.html: 이모지 없음', () => {
