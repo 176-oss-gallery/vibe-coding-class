@@ -45,7 +45,6 @@ var PROP_PEPPER = 'PASSWORD_PEPPER';
 var ITERATIONS = 300;   // 비밀번호 해시 반복 횟수
 var LOCK_AFTER = 5;     // 이 횟수만큼 틀리면 잠금
 var LOCK_SEC = 300;     // 잠금 유지 시간(초)
-var RESET_WINDOW_SEC = 600; // 선생님 초기화 후 학번으로 로그인할 수 있는 시간(초)
 var GLOBAL_FAIL_MAX = 40;   // 1분 동안 전체 오답이 이보다 많으면 BUSY
 var SESSION_TTL = 21600;    // 세션 유지(초)
 var WEAK_LIST = ['password', 'qwer', 'qwerty', 'asdf', '1q2w3e', '0000', '1111', '1234', '12345', '123456', 'abcd1234'];
@@ -102,7 +101,7 @@ var MESSAGES = {
   NOT_REGISTERED: '아직 등록하지 않은 학번이에요. 먼저 등록해 주세요.',
   ALREADY_REGISTERED: '이미 등록된 학번이에요. 본인이 등록한 게 아니면 선생님께 알려 주세요.',
   WRONG_PASSWORD: '비밀번호가 맞지 않아요.',
-  LOCKED: '비밀번호를 여러 번 틀렸어요. 10분 뒤에 다시 하거나 선생님께 초기화를 부탁하세요.',
+  LOCKED: '비밀번호를 여러 번 틀렸어요. 5분 뒤에 다시 하거나 선생님께 초기화를 부탁하세요.',
   WEAK_PASSWORD: '비밀번호는 4~20자로 정해 주세요. 같은 글자 반복, 1234·abcd 같은 순서, 학번·이름이 들어간 것은 쓸 수 없어요.',
   MUST_CHANGE_PASSWORD: '새 비밀번호를 먼저 정해 주세요.',
   SESSION_EXPIRED: '로그인이 끝났어요. 다시 로그인해 주세요.'
@@ -361,15 +360,6 @@ function toMs_(v) {
   return Date.parse(String(v));
 }
 
-// 선생님 초기화가 유효한지: 초기화=Y 이고 초기화시각이 RESET_WINDOW_SEC 이내
-function resetActive(row, nowMs) {
-  if (!row || !row.reset) return false;
-  var t = toMs_(row.resetAt);
-  if (!isFinite(t)) return false;
-  var d = Number(nowMs) - t;
-  return d >= -60000 && d <= RESET_WINDOW_SEC * 1000;
-}
-
 function isLocked(n) {
   return Number(n) >= LOCK_AFTER;
 }
@@ -480,22 +470,26 @@ function findAccount_(accounts, sid) {
 }
 
 // 학번+비밀번호 확인 → { acc, mustChange } 또는 { fail: 응답 }
+// 선생님 초기화(초기화=Y) 상태면 비밀번호는 학번. 학번은 비밀이 아니므로 학번별 잠금은 걸지 않음
+// (초기화가 잠금 해제 역할도 함). 전체 오답 상한은 그대로 적용.
 function authPassword_(deps, sid, password, pepper) {
   var acc = findAccount_(deps.readAccounts() || [], sid);
   if (!acc) return { fail: fail_('NOT_REGISTERED') };
   if (Number(deps.globalFails()) > GLOBAL_FAIL_MAX) return { fail: fail_('BUSY') };
-  var rsv = deps.reserveAttempt(sid); // 해시 전에 시도 횟수를 먼저 올림 (동시 요청 경쟁 방지)
-  if (!rsv || !rsv.ok) return { fail: fail_(rsv && rsv.busy ? 'BUSY' : 'LOCKED') };
-  var active = resetActive(acc, deps.now().getTime());
-  var good = safeEqual(hashPassword(password, acc.salt, pepper, deps.sha256Hex, ITERATIONS), acc.hash);
-  // 선생님 초기화 10분 안에는 학번(임시 비밀번호)도 허용, 어느 쪽이든 변경 필수
-  if (!good && active) good = safeEqual(password, sid);
+  var good;
+  if (acc.reset) {
+    good = safeEqual(String(password), sid);
+  } else {
+    var rsv = deps.reserveAttempt(sid); // 해시 전에 시도 횟수를 먼저 올림 (동시 요청 경쟁 방지)
+    if (!rsv || !rsv.ok) return { fail: fail_(rsv && rsv.busy ? 'BUSY' : 'LOCKED') };
+    good = safeEqual(hashPassword(password, acc.salt, pepper, deps.sha256Hex, ITERATIONS), acc.hash);
+  }
   if (!good) {
     deps.addGlobalFail();
     return { fail: fail_('WRONG_PASSWORD') };
   }
   deps.clearFails(sid);
-  return { acc: acc, mustChange: active };
+  return { acc: acc, mustChange: false };
 }
 
 // 세션 토큰 → { acc } 또는 { fail }
@@ -871,7 +865,8 @@ function realReserveAttempt_(id) {
   }
 }
 
-// 단순 트리거: 선생님이 Accounts 의 초기화 칸에 Y 를 쓰면 초기화시각 기록, 지우면 시각도 지움
+// 단순 트리거: 선생님이 Accounts 의 초기화 칸에 Y 를 쓰면 초기화시각 기록 + 그 학번의 잠금 해제.
+// 초기화시각보다 먼저 발급된 로그인 세션은 무효가 됨. 지우면 시각도 지움.
 function onEdit(e) {
   try {
     var rng = e && e.range;
@@ -884,6 +879,10 @@ function onEdit(e) {
     for (var r = first; r <= last; r++) {
       var v = String(sh.getRange(r, resetCol).getValue()).trim().toUpperCase();
       sh.getRange(r, atCol).setValue(v === 'Y' ? new Date() : '');
+      if (v === 'Y') {
+        var id = String(sh.getRange(r, 1).getValue()).trim();
+        try { if (id) CacheService.getScriptCache().remove('pf:' + id); } catch (e2) { /* 무시 */ }
+      }
     }
   } catch (err) { /* 트리거 오류는 무시 */ }
 }

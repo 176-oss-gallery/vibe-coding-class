@@ -104,7 +104,7 @@ form{margin:0}
       <div class="row" id="outRow" hidden><button class="btn" id="bOut" type="button">로그아웃</button></div>
     </div>
     <div data-mode="password">
-      <p class="notice warn">구글 비밀번호를 쓰지 말고 새로 정한 비밀번호를 쓰세요. 비밀번호를 잊어버리면 선생님께 말하세요. 선생님이 초기화하면 10분 안에 학번으로 로그인해서 새 비밀번호를 정해야 해요.</p>
+      <p class="notice warn">구글 비밀번호를 쓰지 말고 새로 정한 비밀번호를 쓰세요. 비밀번호를 잊어버리거나 잠기면 선생님께 말하세요. 선생님이 초기화하면 학번이 비밀번호가 됩니다.</p>
       <div id="pwForms">
         <div class="seg" role="tablist" aria-label="등록 또는 로그인">
           <button type="button" role="tab" id="tReg" aria-controls="fReg" aria-selected="true">처음이에요: 등록</button>
@@ -228,7 +228,7 @@ const ERR = {
   NOT_REGISTERED: '등록되지 않은 학번입니다. "처음이에요: 등록"에서 먼저 등록하세요.',
   ALREADY_REGISTERED: '이미 등록된 학번입니다. "등록했어요: 로그인"으로 들어가세요. 내가 등록한 게 아니면 선생님께 알리세요.',
   WRONG_PASSWORD: '비밀번호가 틀렸습니다. 다시 입력하세요. 잊었으면 선생님께 초기화를 요청하세요.',
-  LOCKED: '비밀번호를 여러 번 틀렸어요. 5분 뒤에 다시 하거나 선생님께 말하세요.',
+  LOCKED: '비밀번호를 여러 번 틀렸어요. 5분 뒤에 다시 하거나, 선생님께 초기화를 부탁한 뒤 학번으로 로그인하세요.',
   WEAK_PASSWORD: '너무 쉬운 비밀번호예요. 4~20자로, 학번·이름·1234 같은 쉬운 조합은 피하세요.',
   SESSION_EXPIRED: '로그인이 끝났어요. 다시 로그인해 주세요.',
   MUST_CHANGE_PASSWORD: '새 비밀번호를 먼저 정해야 합니다. 3번에서 바꾸세요.'
