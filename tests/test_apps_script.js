@@ -70,11 +70,11 @@ function infoLine(t, d) {
 // ═════════ 순수 함수 ═════════
 
 test('학번 검사: 올바른 학번 통과', () => {
-  for (const s of ['10101', '31640', '21630', 10101]) assert.strictEqual(G.validateStudentId(s), true, String(s));
+  for (const s of ['10101', '31640', '21630', 10101, '10141', '31699', '31098']) assert.strictEqual(G.validateStudentId(s), true, String(s)); // 번호는 01~99 (시험용 번호 허용)
 });
 
 test('학번 검사: 잘못된 학번 거부', () => {
-  for (const s of ['40101', '11701', '10100', '10141', '2031', '203151', '00101', '1010a', '', '２０３１５', '1０101']) {
+  for (const s of ['40101', '11701', '10100', '2031', '203151', '00101', '1010a', '', '２０３１５', '1０101']) {
     assert.strictEqual(G.validateStudentId(s), false, JSON.stringify(s));
   }
 });
@@ -992,16 +992,13 @@ test('관리자 zip: 학번마다 최신 버전만, 반 단위, 파일 ID 없는
   assert.strictEqual(J(G.adminHandle(deps, 'zip', '310')).code, 'TOO_BIG');
 });
 
-test('관리자 비밀번호: 맞으면 통과, 5번 틀리면 잠김, 설정이 없으면 거부, 맞아도 잠긴 동안은 거부', () => {
-  let fails = 0, pw = 'teacher-PW-9';
-  const deps = { getAdminPassword: () => pw, getFails: () => fails, putFails: (n) => { fails = n; }, clearFails: () => { fails = 0; } };
+test('관리자 비밀번호: 맞으면 통과, 여러 번 틀려도 잠기지 않음, 설정이 없으면 거부', () => {
+  let pw = 'teacher-PW-9';
+  const deps = { getAdminPassword: () => pw };
   assert.strictEqual(G.adminPasswordCheck(deps, 'nope'), 'WRONG');
-  assert.strictEqual(G.adminPasswordCheck(deps, 'teacher-PW-9'), 'OK');
-  assert.strictEqual(fails, 0, '성공하면 실패 횟수 초기화');
-  for (let i = 0; i < 5; i++) assert.strictEqual(G.adminPasswordCheck(deps, 'bad' + i), 'WRONG');
-  assert.strictEqual(G.adminPasswordCheck(deps, 'teacher-PW-9'), 'LOCKED');
-  fails = 0;
-  for (const bad of [undefined, null, 5, {}, 'x'.repeat(500), '']) { fails = 0; assert.strictEqual(G.adminPasswordCheck(deps, bad), 'WRONG'); }
+  for (let i = 0; i < 20; i++) assert.strictEqual(G.adminPasswordCheck(deps, 'bad' + i), 'WRONG');
+  assert.strictEqual(G.adminPasswordCheck(deps, 'teacher-PW-9'), 'OK', '많이 틀린 뒤에도 맞으면 통과');
+  for (const bad of [undefined, null, 5, {}, 'x'.repeat(500), '']) assert.strictEqual(G.adminPasswordCheck(deps, bad), 'WRONG');
   pw = '';
   assert.strictEqual(G.adminPasswordCheck(deps, ''), 'NONE', '설정 없으면 빈 비밀번호도 거부');
 });

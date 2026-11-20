@@ -166,7 +166,7 @@ with sync_playwright() as p:
     v = pg.input_value('#prompt1')
     ok('프롬프트에 기획서·추가 요구사항·안전 규칙', all(x in v for x in ['너는 웹 개발자야', '원소 짝꿍 찾기', '우리 반 친구들', '1) 카드 짝 맞추기', '원소 기호', '파란색, 큰 카드', '난이도 선택', '[Gemini Canvas용 개발 지침]', '순수 JavaScript', '첫 화면에 게임 제목과 시작 버튼', '[안전 규칙]']), v)
     pg.screenshot(path=OUT + 't2_prompt.png', full_page=True)
-    pg.fill('#prompt1', '내 마음대로'); pg.click('#t2 >> text=📋 복사')
+    pg.fill('#prompt1', '내 마음대로'); pg.click('#copyp1')
     ok('복사 시 개발 지침·안전 규칙 자동 복원', '[안전 규칙]' in pg.input_value('#prompt1') and '[Gemini Canvas용 개발 지침]' in pg.input_value('#prompt1'))
     pv2 = pg.input_value('#prompt1'); ok('복원해도 중복 없음', pv2.count('[안전 규칙]') == 1 and pv2.count('[Gemini Canvas용 개발 지침]') == 1)
     pg.click('#nav button[data-t=t1]')
@@ -263,12 +263,18 @@ with sync_playwright() as p:
     ok('투표 현황 복원', pg.input_value('#v_practical') == '4')
     # 같은 컴퓨터에서 다른 학생이 로그인
     fake.accounts['10107'] = ('이서준', 'green-Forest-9q')
-    msgs = []
-    pg.once('dialog', lambda dlg: (msgs.append(dlg.message), dlg.dismiss()))
-    pg.click('#logoutbtn'); auth(pg, '10107', 'green-Forest-9q'); pg.wait_for_timeout(500)
+    msgs, answer = [], {'accept': False}
+
+    def on_dialog(dlg):
+        msgs.append(dlg.message)
+        dlg.accept() if answer['accept'] else dlg.dismiss()
+    pg.on('dialog', on_dialog)
+    pg.click('#logoutbtn'); auth(pg, '10107', 'green-Forest-9q')
+    pg.wait_for_function('document.getElementById("aerr").innerText.includes("취소")')
     ok('다른 학생 기록이 남아 있으면 물어봄(취소하면 로그인 안 됨)', msgs and '20315' in msgs[0] and is_on(pg, '#aov') and pg.is_visible('#loginbtn'), str(msgs))
-    pg.once('dialog', lambda dlg: dlg.accept())
+    answer['accept'] = True
     pg.click('#aok'); pg.wait_for_selector('#aov:not(.on)', state='attached')
+    pg.remove_listener('dialog', on_dialog)
     ok('확인하면 이전 학생 기록 비우고 새 학생으로', pg.input_value('#sid') == '10107' and pg.input_value('[data-k=title]') == '' and pg.inner_text('#pchip') == '서약 전')
     errs = [e for e in errs if 'Failed to load resource' not in e]
     # 모바일 로그인 창

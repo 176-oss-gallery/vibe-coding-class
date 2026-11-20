@@ -204,7 +204,7 @@ const CONFIG = { GOOGLE_CLIENT_ID: '242824104003-pp3klam6argfs6jgh37qpcgso4gonng
 const PW_MODE = CONFIG.AUTH_MODE !== 'google';
 
 const MAX_BYTES = 2 * 1024 * 1024;
-const ID_RE = /^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-3]\d|40)$/;
+const ID_RE = /^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-9]\d)$/;
 const ERR = {
   BAD_REQUEST: '요청 형식이 잘못되었습니다. 페이지를 새로고침하고 다시 해 보세요.',
   TOKEN_INVALID: '로그인이 만료되었습니다. 다시 로그인해 주세요.',
