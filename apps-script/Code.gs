@@ -10,6 +10,7 @@
  *   verifyToken(idToken, cfg)  → { ok:true, email, domain, displayName }
  *                               | { ok:false, code, message? }   (code: TOKEN_INVALID | DOMAIN_NOT_ALLOWED | SERVER_ERROR)
  *   readRoster()               → { '<학번>': '<이름>', ... }   (일반 객체)
+ *   upsertRoster(id, name)     → void (roster_required=FALSE 일 때 처음 등록하면 명단에 학번·이름 채움, 3열 '자동')
  *   readBindings()             → [{ id, name, email, displayName, mismatch }]   (mismatch: boolean)
  *   appendBinding(row)         → void; row = { id, name, email, displayName, mismatch:boolean, at:Date }
  *   readSubmissions()          → [{ at:Date|string, id, email, version:number, size:number, sha256, requestId }]
@@ -45,7 +46,6 @@ var PROP_PEPPER = 'PASSWORD_PEPPER';
 var ITERATIONS = 300;   // 비밀번호 해시 반복 횟수
 var LOCK_AFTER = 5;     // 이 횟수만큼 틀리면 잠금
 var LOCK_SEC = 300;     // 잠금 유지 시간(초)
-var RESET_WINDOW_SEC = 600; // 선생님 초기화 후 학번으로 로그인할 수 있는 시간(초)
 var GLOBAL_FAIL_MAX = 40;   // 1분 동안 전체 오답이 이보다 많으면 BUSY
 var SESSION_TTL = 21600;    // 세션 유지(초)
 var WEAK_LIST = ['password', 'qwer', 'qwerty', 'asdf', '1q2w3e', '0000', '1111', '1234', '12345', '123456', 'abcd1234'];
@@ -66,7 +66,7 @@ var ID_RE = /^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-3]\d|40)$/; // tools/common.py �
 var ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
 
 var SHEETS = {
-  Roster: ['학번', '이름'],
+  Roster: ['학번', '이름', '추가'],
   Bindings: ['학번', '이름', '이메일', '계정표시이름', '이름불일치', '연결시각', '계정종류'],
   Submissions: ['시각', '학번', '이메일', '버전', '드라이브파일ID', '크기', 'sha256', '요청ID'],
   Config: ['키', '값'],
@@ -77,7 +77,7 @@ var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8], Account
 
 var CONFIG_DEFAULTS = [
   ['auth_mode', 'password'],   // password | google
-  ['roster_required', 'TRUE'],
+  ['roster_required', 'FALSE'], // FALSE = 명단 없이 시작, 처음 등록할 때 명단에 자동 추가 / TRUE = 명단에 있는 학번만
   ['allowed_domains', ''],
   ['allow_personal', 'FALSE'], // TRUE면 allowed_domains가 있어도 개인 구글 계정(gmail 등) 허용. 대신 이름이 명단과 같아야 연결됨
   ['max_html_bytes', 2097152],
@@ -102,7 +102,7 @@ var MESSAGES = {
   NOT_REGISTERED: '아직 등록하지 않은 학번이에요. 먼저 등록해 주세요.',
   ALREADY_REGISTERED: '이미 등록된 학번이에요. 본인이 등록한 게 아니면 선생님께 알려 주세요.',
   WRONG_PASSWORD: '비밀번호가 맞지 않아요.',
-  LOCKED: '비밀번호를 여러 번 틀렸어요. 10분 뒤에 다시 하거나 선생님께 초기화를 부탁하세요.',
+  LOCKED: '비밀번호를 여러 번 틀렸어요. 5분 뒤에 다시 하거나 선생님께 초기화를 부탁하세요.',
   WEAK_PASSWORD: '비밀번호는 4~20자로 정해 주세요. 같은 글자 반복, 1234·abcd 같은 순서, 학번·이름이 들어간 것은 쓸 수 없어요.',
   MUST_CHANGE_PASSWORD: '새 비밀번호를 먼저 정해 주세요.',
   SESSION_EXPIRED: '로그인이 끝났어요. 다시 로그인해 주세요.'
@@ -361,15 +361,6 @@ function toMs_(v) {
   return Date.parse(String(v));
 }
 
-// 선생님 초기화가 유효한지: 초기화=Y 이고 초기화시각이 RESET_WINDOW_SEC 이내
-function resetActive(row, nowMs) {
-  if (!row || !row.reset) return false;
-  var t = toMs_(row.resetAt);
-  if (!isFinite(t)) return false;
-  var d = Number(nowMs) - t;
-  return d >= -60000 && d <= RESET_WINDOW_SEC * 1000;
-}
-
 function isLocked(n) {
   return Number(n) >= LOCK_AFTER;
 }
@@ -480,22 +471,26 @@ function findAccount_(accounts, sid) {
 }
 
 // 학번+비밀번호 확인 → { acc, mustChange } 또는 { fail: 응답 }
+// 선생님 초기화(초기화=Y) 상태면 비밀번호는 학번. 학번은 비밀이 아니므로 학번별 잠금은 걸지 않음
+// (초기화가 잠금 해제 역할도 함). 전체 오답 상한은 그대로 적용.
 function authPassword_(deps, sid, password, pepper) {
   var acc = findAccount_(deps.readAccounts() || [], sid);
   if (!acc) return { fail: fail_('NOT_REGISTERED') };
   if (Number(deps.globalFails()) > GLOBAL_FAIL_MAX) return { fail: fail_('BUSY') };
-  var rsv = deps.reserveAttempt(sid); // 해시 전에 시도 횟수를 먼저 올림 (동시 요청 경쟁 방지)
-  if (!rsv || !rsv.ok) return { fail: fail_(rsv && rsv.busy ? 'BUSY' : 'LOCKED') };
-  var active = resetActive(acc, deps.now().getTime());
-  var good = safeEqual(hashPassword(password, acc.salt, pepper, deps.sha256Hex, ITERATIONS), acc.hash);
-  // 선생님 초기화 10분 안에는 학번(임시 비밀번호)도 허용, 어느 쪽이든 변경 필수
-  if (!good && active) good = safeEqual(password, sid);
+  var good;
+  if (acc.reset) {
+    good = safeEqual(String(password), sid);
+  } else {
+    var rsv = deps.reserveAttempt(sid); // 해시 전에 시도 횟수를 먼저 올림 (동시 요청 경쟁 방지)
+    if (!rsv || !rsv.ok) return { fail: fail_(rsv && rsv.busy ? 'BUSY' : 'LOCKED') };
+    good = safeEqual(hashPassword(password, acc.salt, pepper, deps.sha256Hex, ITERATIONS), acc.hash);
+  }
   if (!good) {
     deps.addGlobalFail();
     return { fail: fail_('WRONG_PASSWORD') };
   }
   deps.clearFails(sid);
-  return { acc: acc, mustChange: active };
+  return { acc: acc, mustChange: false };
 }
 
 // 세션 토큰 → { acc } 또는 { fail }
@@ -567,6 +562,8 @@ function doRegister_(deps, cfg, req, sid, pepper) {
     if (normName_(rosterName) && normName_(rosterName) !== normName_(name)) return fail_('NAME_MISMATCH', MSG_NAME_NOT_ROSTER);
     if (findAccount_(deps.readAccounts() || [], sid)) return fail_('ALREADY_REGISTERED');
     deps.appendAccount({ id: sid, name: name, hash: hash, salt: salt, at: deps.now() });
+    // 명단 없이 시작하는 경우(roster_required=FALSE): 처음 등록할 때 명단에 학번·이름을 채움
+    if (!cfg.roster_required && !normName_(rosterName)) deps.upsertRoster(sid, name);
   } finally {
     deps.releaseLock();
   }
@@ -758,6 +755,19 @@ function makeRealDeps() {
       });
       return out;
     },
+    // 명단에 학번이 있으면(이름 빈칸) 이름을 채우고, 없으면 새 행 추가. 3열에 '자동' 표시
+    upsertRoster: function (id, name) {
+      var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Roster');
+      if (sh && sh.getLastRow() >= 2) {
+        var ids = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+        for (var i = 0; i < ids.length; i++) {
+          if (String(ids[i][0]).trim() !== String(id)) continue;
+          sh.getRange(i + 2, 2, 1, 2).setValues([[textCell_(name), '자동']]);
+          return;
+        }
+      }
+      appendRow_('Roster', [id, textCell_(name), '자동']);
+    },
     readBindings: function () {
       return dataRows_('Bindings').filter(function (r) { return String(r[0]).trim(); }).map(function (r) {
         return { id: String(r[0]).trim(), name: String(r[1]), email: String(r[2]).trim().toLowerCase(),
@@ -871,7 +881,8 @@ function realReserveAttempt_(id) {
   }
 }
 
-// 단순 트리거: 선생님이 Accounts 의 초기화 칸에 Y 를 쓰면 초기화시각 기록, 지우면 시각도 지움
+// 단순 트리거: 선생님이 Accounts 의 초기화 칸에 Y 를 쓰면 초기화시각 기록 + 그 학번의 잠금 해제.
+// 초기화시각보다 먼저 발급된 로그인 세션은 무효가 됨. 지우면 시각도 지움.
 function onEdit(e) {
   try {
     var rng = e && e.range;
@@ -884,6 +895,10 @@ function onEdit(e) {
     for (var r = first; r <= last; r++) {
       var v = String(sh.getRange(r, resetCol).getValue()).trim().toUpperCase();
       sh.getRange(r, atCol).setValue(v === 'Y' ? new Date() : '');
+      if (v === 'Y') {
+        var id = String(sh.getRange(r, 1).getValue()).trim();
+        try { if (id) CacheService.getScriptCache().remove('pf:' + id); } catch (e2) { /* 무시 */ }
+      }
     }
   } catch (err) { /* 트리거 오류는 무시 */ }
 }

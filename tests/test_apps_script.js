@@ -310,6 +310,7 @@ function makeDeps(over) {
       ? Object.assign({ ok: true }, TOKENS[tok], { email: TOKENS[tok].email.toLowerCase() })
       : { ok: false, code: 'TOKEN_INVALID' }),
     readRoster: () => Object.assign({}, st.roster),
+    upsertRoster: (id, name) => { st.roster[id] = name; st.rosterAuto = (st.rosterAuto || 0) + 1; },
     readBindings: () => st.bindings.map((r) => Object.assign({}, r)),
     appendBinding: (row) => { st.bindings.push(Object.assign({}, row)); },
     readSubmissions: () => st.subs.map((r) => Object.assign({}, r)),
@@ -739,6 +740,31 @@ function teacherReset(st, id, agoMs) {
   a.resetAt = new Date(st.t - (agoMs || 0));
 }
 
+test('명단 없이 시작(roster_required=FALSE): 처음 등록하면 명단에 자동 추가, 이후엔 그 이름과 같아야 함', () => {
+  const { deps, st } = pwDeps();
+  st.cfg.roster_required = false;
+  st.roster = {};
+  let r = pcall(deps, { action: 'register', studentId: '20315', name: '김 하늘', password: 'sky-PW-1234' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(st.roster['20315'], '김 하늘', '명단에 자동 추가');
+  assert.strictEqual(st.rosterAuto, 1);
+  // 같은 학번 다시 등록은 기존처럼 거부, 명단 추가도 다시 안 함
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '20315', name: '김하늘', password: 'sea-PW-5678' }).code, 'ALREADY_REGISTERED');
+  assert.strictEqual(st.rosterAuto, 1);
+  // 명단에 이름이 이미 있으면 그 이름과 같아야 함 (자동 추가 없음)
+  st.roster['20316'] = '이바다';
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '20316', name: '이바닥', password: 'sea-PW-5678' }).code, 'NAME_MISMATCH');
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '20316', name: '이바다', password: 'sea-PW-5678' }).ok, true);
+  assert.strictEqual(st.rosterAuto, 1);
+  // 명단에 학번만 있고 이름이 빈 경우는 이름을 채움
+  st.roster['20317'] = '';
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '20317', name: '박구름', password: 'sun-PW-2468' }).ok, true);
+  assert.strictEqual(st.roster['20317'], '박구름');
+  // 학번 형식은 여전히 검사
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '41701', name: '누구', password: 'sun-PW-2468' }).code, 'BAD_REQUEST');
+  assert.strictEqual(st.locks, st.releases);
+});
+
 test('설정 읽기: auth_mode 기본 password, 잘못된 값도 password', () => {
   assert.strictEqual(G.parseConfig([]).auth_mode, 'password');
   assert.strictEqual(G.parseConfig([['키', '값'], ['auth_mode', ' Google ']]).auth_mode, 'google');
@@ -781,19 +807,6 @@ test('validatePassword: 길이·제어문자·쉬운 비밀번호·학번/이름
   assert.strictEqual(G.isLocked(5), true);
   assert.strictEqual(G.LOCK_AFTER, 5);
   assert.strictEqual(G.LOCK_SEC, 300);
-});
-
-test('resetActive: 초기화=Y 이고 10분 이내만', () => {
-  const now = Date.parse('2026-11-20T01:00:00Z');
-  assert.strictEqual(G.resetActive({ reset: true, resetAt: new Date(now - 60000) }, now), true);
-  assert.strictEqual(G.resetActive({ reset: true, resetAt: new Date(now - 600000) }, now), true, '정확히 10분');
-  assert.strictEqual(G.resetActive({ reset: true, resetAt: new Date(now - 601000) }, now), false, '만료');
-  assert.strictEqual(G.resetActive({ reset: true, resetAt: new Date(now - 60000).toISOString() }, now), true, '문자열 시각');
-  assert.strictEqual(G.resetActive({ reset: true, resetAt: '' }, now), false, '시각 없음');
-  assert.strictEqual(G.resetActive({ reset: false, resetAt: new Date(now) }, now), false);
-  assert.strictEqual(G.resetActive({ reset: true, resetAt: new Date(now + 3600000) }, now), false, '미래 시각');
-  assert.strictEqual(G.resetActive(null, now), false);
-  assert.strictEqual(G.RESET_WINDOW_SEC, 600);
 });
 
 test('register: 성공(세션 발급)·명단 없음·이름 불일치·중복·약한 비밀번호', () => {
@@ -877,49 +890,45 @@ test('전체 오답이 1분에 40번 넘으면 BUSY', () => {
   assert.strictEqual(st.fails['10101'], undefined, 'BUSY 는 시도 횟수를 쓰지 않음');
 });
 
-test('선생님 초기화: 10분 안에는 학번·기존 비밀번호 모두 mustChange, 세션 없음 → 변경 후 세션', () => {
+test('선생님 초기화: 비밀번호가 학번이 되고 바로 제출 가능(변경 화면 없음), 예전 비밀번호·세션은 무효', () => {
   const { deps, st } = pwDeps();
   const reg = pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
   teacherReset(st, '10101', 60000);
   // 초기화 전에 받은 세션은 무효
   assert.strictEqual(pcall(deps, { action: 'list_mine', session: reg.session }).code, 'SESSION_EXPIRED');
-  let r = pcall(deps, { action: 'login', studentId: '10101', password: '10101' });
-  eq(r, { ok: true, studentId: '10101', name: '김하늘', mustChange: true, session: null });
-  r = pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' });
-  assert.strictEqual(r.mustChange, true, '기존 비밀번호도 변경 필수');
-  assert.strictEqual(r.session, null);
-  assert.strictEqual(pcall(deps, { action: 'submit', studentId: '10101', password: '10101', html: PAGE }).code, 'MUST_CHANGE_PASSWORD');
-  assert.strictEqual(pcall(deps, { action: 'list_mine', studentId: '10101', password: '10101' }).code, 'MUST_CHANGE_PASSWORD');
-  assert.strictEqual(st.files.size, 0);
-  assert.strictEqual(pcall(deps, { action: 'change_password', studentId: '10101', password: '10101', newPassword: '10101' }).code, 'WEAK_PASSWORD');
-  assert.strictEqual(pcall(deps, { action: 'change_password', studentId: '10101', password: '10101', newPassword: 'ab' }).code, 'WEAK_PASSWORD');
-  assert.strictEqual(pcall(deps, { action: 'change_password', studentId: '10101', password: '10101' }).code, 'BAD_REQUEST');
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).code, 'WRONG_PASSWORD', '예전 비밀번호 무효');
+  const r = pcall(deps, { action: 'login', studentId: '10101', password: '10101' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(r.mustChange, false);
+  assert.ok(typeof r.session === 'string' && r.session.length >= 16, '바로 세션 발급');
+  assert.strictEqual(pcall(deps, { action: 'submit', session: r.session, html: PAGE }).ok, true, '바로 제출');
+  assert.strictEqual(pcall(deps, { action: 'submit', studentId: '10101', password: '10101', html: PAGE + ' ' }).ok, true);
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: r.session }).items.length, 2);
+  // 몇 시간이 지나도 초기화(Y)가 남아 있으면 학번으로 로그인 가능
+  st.t += 6 * 3600 * 1000;
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: '10101' }).ok, true);
+  // 원하면 비밀번호를 바꿀 수 있고, 바꾸면 초기화 해제
   const ch = pcall(deps, { action: 'change_password', studentId: '10101', password: '10101', newPassword: 'new-PW-9999' });
   assert.strictEqual(ch.ok, true, JSON.stringify(ch));
-  assert.strictEqual(ch.studentId, '10101');
-  assert.ok(typeof ch.session === 'string');
   assert.strictEqual(st.accounts[0].reset, false, '초기화 해제');
-  assert.strictEqual(st.accounts[0].resetAt, '', '초기화시각 해제');
   assert.strictEqual(st.hashedInLock, false, '해시는 잠금 밖에서');
   assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: '10101' }).code, 'WRONG_PASSWORD');
-  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).code, 'WRONG_PASSWORD');
-  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'new-PW-9999' }).mustChange, false);
-  assert.strictEqual(pcall(deps, { action: 'submit', session: ch.session, html: PAGE }).ok, true, '변경 후 세션으로 제출');
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'new-PW-9999' }).ok, true);
   assert.strictEqual(st.locks, st.releases);
 });
 
-test('선생님 초기화: 10분 지나면 학번으로는 안 되고 기존 비밀번호는 정상', () => {
+test('선생님 초기화: 잠긴 학번도 바로 학번으로 로그인(잠금 해제), 초기화시각이 없어도 Y면 초기화', () => {
   const { deps, st } = pwDeps();
   pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
-  teacherReset(st, '10101', 601000);
-  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: '10101' }).code, 'WRONG_PASSWORD');
-  const r = pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' });
-  assert.strictEqual(r.ok, true);
-  assert.strictEqual(r.mustChange, false);
-  // 시각 없이 Y 만 있으면(트리거 미동작) 초기화 아님
+  for (let i = 0; i < 5; i++) pcall(deps, { action: 'login', studentId: '10101', password: 'wrong-PW-' + i });
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).code, 'LOCKED');
+  // 트리거가 시각을 못 적은 경우도 Y 만으로 초기화
+  st.accounts[0].reset = true;
   st.accounts[0].resetAt = '';
-  delete st.fails['10101'];
-  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: '10101' }).code, 'WRONG_PASSWORD');
+  const r = pcall(deps, { action: 'login', studentId: '10101', password: '10101' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(st.fails['10101'], undefined, '성공하면 시도 횟수 지움');
+  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'x10101' }).code, 'WRONG_PASSWORD');
 });
 
 test('세션: 비밀번호 변경 시 예전 세션 무효, 잘못된·만료 세션은 SESSION_EXPIRED, 행 삭제 시 무효', () => {
