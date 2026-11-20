@@ -23,6 +23,7 @@
    - 앱 이름: `바이브코딩 제출 시험`, 지원 이메일: 선생님 메일.
    - 대상(사용자 유형): **외부**.
    - 범위(데이터 액세스): 아무것도 추가하지 않습니다. 기본 `openid`, `email`, `profile`만 씁니다.
+   - 앱 도메인: 홈페이지 `https://176-oss-gallery.github.io/vibe-coding-class/`, 개인정보처리방침 `https://176-oss-gallery.github.io/vibe-coding-class/lab/privacy.html`, 승인된 도메인 `176-oss-gallery.github.io`. 이 칸을 채워야 '앱 게시' 버튼이 켜집니다.
 3. **대상(Audience)** 화면 → 게시 상태 **앱 게시(프로덕션으로 푸시)**.
    - 테스트 상태로 두면 등록한 사용자 100명까지만 로그인됩니다.
    - 기본 범위만 쓰므로 구글 심사(인증)는 필요 없습니다.
