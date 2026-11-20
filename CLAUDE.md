@@ -8,17 +8,17 @@
 작업을 시작하기 전에 SPEC.md와 README.md를 읽고 현재 상태를 요약한다.
 
 ## 구조
-- `site/index.html` 학생용 앱(메인 화면, 4차시 탭에 갤러리를 iframe으로 끼워 넣음)(단일 HTML, 외부 라이브러리·외부 요청 없음)
+- `site/index.html` 학생용 앱(메인 화면: 로그인·서약·기획·게임 제출·투표, 4차시 탭에 갤러리를 iframe으로 끼워 넣음)(단일 HTML, 외부 라이브러리 없음, 요청은 제출 서버 하나)
 - `site/gallery/` (index, class, play, gallery.css/js) 갤러리 / `site/data/*.json` 작품 목록(publish.py가 생성)
 - `site/games/<반2자리>/<코드>.html` 공개 게임(publish.py가 생성)
-- `tools/ingest.py, publish.py, common.py` 교사용 스크립트 / `tools/make_forms.gs` 구글 폼 생성(미시험)
+- `tools/ingest.py, publish.py, tally.py, common.py` 교사용 스크립트 / `tools/make_forms.gs` 구글 폼 생성(미시험)
 - `site/lab/` 앱스크립트 제출 시험 페이지(임시, 규칙 3의 예외: 구글 로그인 스크립트와 웹앱 요청을 씀) / `apps-script/Code.gs` 시험용 웹앱 서버. 절차는 `docs/APPS-SCRIPT-TEST.md`. 시험이 끝나면 `site/lab/`은 지운다.
-- `docs/FORMS.md` 폼 구성안 / `tests/` 테스트 / `private/` 교사 컴퓨터 전용(커밋 금지)
+- `docs/FORMS.md` 옛 폼 구성안(지금은 앱이 제출 서버로 직접 제출하므로 쓰지 않음) / `tests/` 테스트 / `private/` 교사 컴퓨터 전용(커밋 금지)
 
 ## 지켜야 할 규칙
 1. 공개되는 것(파일 이름, 갤러리 화면, `site/data`, 커밋)에 학번·이름이 들어가면 안 된다. 대응표는 `private/mapping.csv`에만 둔다.
 2. `private/`, `*.csv`는 절대 커밋하지 않는다(.gitignore). 학생 제출 원본도 마찬가지.
-3. 학생용 앱은 단일 HTML 파일을 유지한다. 외부 CDN·폰트·이미지 요청 금지.
+3. 학생용 앱은 단일 HTML 파일을 유지한다. 외부 CDN·폰트·이미지 요청 금지. 네트워크 요청은 제출 서버(`CONFIG.WEB_APP_URL`, 구글 앱스크립트)로 가는 `fetch` 하나뿐이다. 로그인 정보(세션)는 메모리에만 두고 브라우저 저장소에 넣지 않는다.
 4. 갤러리의 게임 iframe은 `sandbox="allow-scripts allow-modals allow-pointer-lock"`만 쓴다(`allow-same-origin` 금지). 게임 제목은 항상 `textContent`로 넣는다.
 5. 보안 규칙(CSP)은 `publish.py`의 `harden()`이 게임 파일에 meta로 넣는다. iframe `csp` 속성은 GitHub Pages에서 동작하지 않는다.
 6. 코드를 바꾼 뒤에는 아래 테스트를 모두 돌려 통과를 확인한다.
