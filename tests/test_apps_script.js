@@ -229,8 +229,10 @@ test('캐시 TTL', () => {
 });
 
 test('설정 읽기: 기본값', () => {
-  const d = { roster_required: true, allowed_domains: [], max_html_bytes: 2097152, session_open: true, submit_per_minute: 5, allow_personal: false, auth_mode: 'password' };
+  const d = { roster_required: true, allowed_domains: [], max_html_bytes: 2097152, session_open: true, submit_per_minute: 5, allow_personal: false, auth_mode: 'password', vote_open: true };
   eq(G.parseConfig([]), d);
+  eq(G.parseConfig([['키', '값'], ['vote_open', 'FALSE']]).vote_open, false);
+  eq(G.parseConfig([['키', '값'], ['vote_open', '모름']]).vote_open, true);
   eq(G.parseConfig([['키', '값'], ['allow_personal', 'TRUE']]).allow_personal, true);
   eq(G.parseConfig([['키', '값'], ['allow_personal', '모름']]).allow_personal, false);
   eq(G.parseConfig([['키', '값'], ['submit_per_minute', 'abc']]), d);
@@ -294,11 +296,11 @@ const ALL_EMAILS = ['alice@school.kr', 'bob@school.kr', 'carol@school.kr', 'dave
 const PEPPER = 'PEPPER-SECRET-q9z8';
 function makeDeps(over) {
   const st = {
-    cfg: { roster_required: true, allowed_domains: [], max_html_bytes: 4096, session_open: true, auth_mode: 'google' },
+    cfg: { roster_required: true, allowed_domains: [], max_html_bytes: 4096, session_open: true, vote_open: true, auth_mode: 'google' },
     accounts: [], fails: {}, pepper: PEPPER, saltSeq: 0, sessions: new Map(), sv: {}, globalFails: 0,
     inLock: false, lockHashes: 0, hashedInLock: false,
     roster: { '10101': '김하늘', '10102': '이바다', '10103': '박구름' },
-    bindings: [], subs: [], files: new Map(), rateOk: true, discarded: [], logs: [], lockOk: true, locks: 0, releases: 0, seq: 0,
+    bindings: [], subs: [], notes: [], votes: [], files: new Map(), rateOk: true, discarded: [], logs: [], lockOk: true, locks: 0, releases: 0, seq: 0,
     t: Date.parse('2026-11-20T01:00:00Z')
   };
   const deps = {
@@ -335,6 +337,12 @@ function makeDeps(over) {
     readBindings: () => st.bindings.map((r) => Object.assign({}, r)),
     appendBinding: (row) => { st.bindings.push(Object.assign({}, row)); },
     readSubmissions: () => st.subs.map((r) => Object.assign({}, r)),
+    appendNote: (n) => { st.notes.push(Object.assign({}, n)); },
+    appendVote: (v) => { st.votes.push(Object.assign({}, v, { votes: Object.assign({}, v.votes) })); },
+    readNotesMeta: () => st.notes.map((n) => ({ at: n.at, id: n.id, section: n.section })),
+    readNotes: () => st.notes.map((n) => Object.assign({}, n)),
+    readVotes: () => st.votes.map((v) => Object.assign({}, v, { votes: Object.assign({}, v.votes) })),
+    voteOpen: () => st.cfg.vote_open !== false,
     saveFile: (name, text) => {
       if (st.files.has(name)) throw new Error('덮어쓰기 시도: ' + name);
       const id = 'file' + (++st.seq);
@@ -838,6 +846,125 @@ test('관리자 목록: 학번·이름으로 찾기, 제출 수·최근 제출, 
   eq(J(G.adminRows(accounts, subs, '없는사람', [])).rows, []);
 });
 
+function pwLogin(deps, id, name) {
+  pcall(deps, { action: 'register', studentId: id, name, password: 'blue-River-47x' });
+  const r = pcall(deps, { action: 'login', studentId: id, password: 'blue-River-47x' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  return r.session;
+}
+
+test('글 제출(note): 세션 필요, 구간·길이 검사, 다시 내면 추가만, 학번은 세션에서 정해짐', () => {
+  const { deps, st } = pwDeps();
+  st.cfg.roster_required = false;
+  const sess = pwLogin(deps, '31040', '김하늘');
+  assert.strictEqual(pcall(deps, { action: 'note', section: 't1', text: '안녕' }).code, 'BAD_REQUEST', '세션 없음');
+  assert.strictEqual(pcall(deps, { action: 'note', session: 'x'.repeat(30), section: 't1', text: '안녕' }).code, 'SESSION_EXPIRED');
+  const bads = [{ section: 't9', text: 'a' }, { section: 't1', text: '' }, { section: 't1', text: '   ' }, { section: 't1', text: 5 },
+    { section: 't1', text: 'a'.repeat(G.NOTE_MAX + 1) }, { section: 'toString', text: 'a' }];
+  for (const bad of bads) {
+    assert.strictEqual(pcall(deps, Object.assign({ action: 'note', session: sess }, bad)).code, 'BAD_REQUEST', JSON.stringify(bad).slice(0, 40));
+  }
+  const r = pcall(deps, { action: 'note', session: sess, section: 't1', text: '[1차시] 31040 김하늘\r\n서약서: 2026. 11. 20. 서명 완료‮\n', studentId: '10101' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(st.notes.length, 1);
+  assert.strictEqual(st.notes[0].id, '31040', '학번은 세션에서 정함(요청의 studentId 무시)');
+  assert.ok(!/[\r‮]/.test(st.notes[0].text), '제어·방향 문자 제거');
+  assert.ok(st.notes[0].text.includes('서명 완료'));
+  pcall(deps, { action: 'note', session: sess, section: 't1', text: '고친 글' });
+  assert.strictEqual(st.notes.length, 2, '추가만 함');
+  assert.ok(pcall(deps, { action: 'status', session: sess }).notes.t1);
+  assert.strictEqual(st.locks, st.releases);
+  st.cfg.session_open = false;
+  assert.strictEqual(pcall(deps, { action: 'note', session: sess, section: 't2', text: 'a' }).code, 'SESSION_CLOSED');
+});
+
+test('투표(vote): 네 부문 1~99 정수, 반은 학번에서, 닫으면 거부, 현황에 마지막 투표', () => {
+  const { deps, st } = pwDeps();
+  st.cfg.roster_required = false;
+  const sess = pwLogin(deps, '31040', '김하늘');
+  const ok = { sci: 3, fun: '12', creative: 5, practical: 99 };
+  const bads = [null, [], {}, { sci: 1, fun: 1, creative: 1 }, { sci: 0, fun: 1, creative: 1, practical: 1 }, { sci: 100, fun: 1, creative: 1, practical: 1 },
+    { sci: 1.5, fun: 1, creative: 1, practical: 1 }, { sci: -1, fun: 1, creative: 1, practical: 1 }, { sci: 'a', fun: 1, creative: 1, practical: 1 },
+    { sci: '1e1', fun: 1, creative: 1, practical: 1 }];
+  for (const bad of bads) assert.strictEqual(pcall(deps, { action: 'vote', session: sess, votes: bad }).code, 'BAD_REQUEST', JSON.stringify(bad));
+  assert.strictEqual(pcall(deps, { action: 'vote', votes: ok }).code, 'BAD_REQUEST', '세션 없음');
+  const r = pcall(deps, { action: 'vote', session: sess, votes: ok, cls: '399' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  eq(st.votes[0].votes, { sci: 3, fun: 12, creative: 5, practical: 99 });
+  assert.strictEqual(st.votes[0].cls, '310', '반은 학번에서');
+  pcall(deps, { action: 'vote', session: sess, votes: { sci: 1, fun: 2, creative: 3, practical: 4 } });
+  const stt = pcall(deps, { action: 'status', session: sess });
+  eq(stt.vote.votes, { sci: 1, fun: 2, creative: 3, practical: 4 }, '가장 나중 투표');
+  assert.strictEqual(stt.voteOpen, true);
+  st.cfg.vote_open = false;
+  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, votes: ok }).code, 'VOTE_CLOSED');
+  assert.strictEqual(pcall(deps, { action: 'status', session: sess }).voteOpen, false);
+  assert.strictEqual(st.locks, st.releases);
+});
+
+test('글·투표·현황은 구글 방식에서는 거부, 현황은 글 내용을 돌려주지 않음', () => {
+  const g = makeDeps();
+  g.st.cfg.auth_mode = 'google';
+  for (const a of ['note', 'vote', 'status']) assert.strictEqual(call(g.deps, { action: a, idToken: A, section: 't1', text: 'a', votes: {} }).code, 'BAD_REQUEST', a);
+  const { deps, st } = pwDeps();
+  st.cfg.roster_required = false;
+  const sess = pwLogin(deps, '31040', '김하늘');
+  pcall(deps, { action: 'note', session: sess, section: 't2', text: '비밀 내용 XYZ' });
+  assert.ok(!JSON.stringify(pcall(deps, { action: 'status', session: sess })).includes('XYZ'));
+});
+
+test('관리자 투표 집계: 투표자마다 마지막 한 번, 반별·부문별 득표 순', () => {
+  const T = (m) => new Date(Date.parse('2026-11-20T01:00:00Z') + m * 60000);
+  const votes = [
+    { id: '31001', at: T(1), votes: { sci: 3, fun: 5, creative: 5, practical: 1 } },
+    { id: '31001', at: T(5), votes: { sci: 4, fun: 5, creative: 5, practical: 1 } },
+    { id: '31002', at: T(2), votes: { sci: 4, fun: 6, creative: 5, practical: 2 } },
+    { id: '31003', at: T(3), votes: { sci: 4, fun: 6, creative: 7, practical: 2 } },
+    { id: '21005', at: T(4), votes: { sci: 9, fun: 9, creative: 9, practical: 9 } },
+    { id: 'bad', at: T(4), votes: { sci: 1, fun: 1, creative: 1, practical: 1 } }
+  ];
+  const t = J(G.adminTally(votes));
+  eq(t.map((c) => [c.key, c.label, c.voters]), [['210', '2학년 10반', 1], ['310', '3학년 10반', 3]]);
+  const c = t[1];
+  eq(c.cats.sci, [{ n: 4, count: 3 }], '마지막 표만 셈(3번 표는 사라짐)');
+  eq(c.cats.fun, [{ n: 6, count: 2 }, { n: 5, count: 1 }]);
+  eq(c.cats.creative, [{ n: 5, count: 2 }, { n: 7, count: 1 }]);
+  const d = { readVotes: () => votes, voteOpen: () => true };
+  assert.strictEqual(J(G.adminHandle(d, 'tally', '')).voteOpen, true);
+  const v = J(G.adminHandle(d, 'votes', ''));
+  assert.strictEqual(v.ok, true);
+  assert.strictEqual(v.count, 4);
+  assert.ok(v.csv.startsWith('﻿"학번","반"'));
+  assert.ok(v.csv.includes('"31001","310","4","5","5","1"'), '31001 은 마지막 표');
+  assert.ok(!v.csv.includes('bad'));
+});
+
+test('관리자 글 CSV: 학번·구간마다 가장 나중 글, 반 필터, 수식 방지, 이름 붙임', () => {
+  const T = (m) => new Date(Date.parse('2026-11-20T01:00:00Z') + m * 60000);
+  const accounts = [{ id: '31001', name: '김하늘' }, { id: '31002', name: '이바다' }, { id: '21005', name: '박구름' }];
+  const notes = [
+    { id: '31001', at: T(1), section: 't1', text: '옛 글' },
+    { id: '31001', at: T(3), section: 't1', text: '[1차시] 서약서: 2026. 11. 20. 서명 완료\n"따옴표", 쉼표' },
+    { id: '31001', at: T(2), section: 't2', text: '=HYPERLINK("http://x","y")' },
+    { id: '31002', at: T(2), section: 't3', text: '소감' },
+    { id: '21005', at: T(2), section: 't1', text: '다른 반' },
+    { id: '31001', at: T(2), section: 'zz', text: '잘못된 구간' }
+  ];
+  const d = { readAccounts: () => accounts, readNotes: () => notes };
+  const r = J(G.adminHandle(d, 'notes', '310'));
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(r.name, 'notes_310.csv');
+  assert.strictEqual(r.count, 3);
+  assert.ok(r.csv.startsWith('﻿"학번","이름","구간","제출시각","글"'));
+  assert.ok(!r.csv.includes('옛 글') && !r.csv.includes('다른 반') && !r.csv.includes('잘못된'));
+  assert.ok(r.csv.includes('"31001","김하늘","t1"'));
+  assert.ok(r.csv.includes('"\'=HYPERLINK('), '수식으로 시작하는 글은 앞에 작은따옴표');
+  assert.ok(r.csv.includes('""따옴표"", 쉼표'), '따옴표 이스케이프');
+  assert.strictEqual(J(G.adminHandle(d, 'notes', '')).count, 4, '전체');
+  assert.strictEqual(J(G.adminHandle(d, 'notes', '399')).code, 'BAD_REQUEST');
+  assert.strictEqual(J(G.adminHandle(d, 'notes', '110')).code, 'NOT_FOUND');
+});
+
 test('관리자 zip: 학번마다 최신 버전만, 반 단위, 파일 ID 없는 행 제외', () => {
   const subs = [
     { id: '31040', version: 1, fileId: 'f1' }, { id: '31040', version: 3, fileId: 'f3' }, { id: '31040', version: 2, fileId: 'f2' },
@@ -883,7 +1010,7 @@ test('관리자 화면: 스크립트 문법이 맞고 서버 호출 이름이 �
   const m = /<script>([\s\S]*)<\/script>/.exec(G.ADMIN_HTML);
   assert.ok(m, '스크립트 없음');
   new vm.Script(m[1]); // 문법 오류면 여기서 던짐
-  for (const fn of ['adminInfo', 'adminList', 'adminReset', 'adminClasses', 'adminZip']) {
+  for (const fn of ['adminInfo', 'adminList', 'adminReset', 'adminClasses', 'adminZip', 'adminNotes', 'adminVotes', 'adminTallyView']) {
     assert.strictEqual(typeof G[fn], 'function', fn);
     assert.ok(G.ADMIN_HTML.includes('.' + fn + '('), '화면이 ' + fn + ' 를 부르지 않음');
   }
