@@ -1153,18 +1153,13 @@ test('hashPassword: 결정적, 솔트·페퍼·반복에 따라 달라짐', () =
   assert.strictEqual(G.safeEqual('', ''), true);
 });
 
-test('validatePassword: 길이·제어문자·쉬운 비밀번호·학번/이름', () => {
-  for (const ok of ['sky7', ' a b ', 'k9#x'.repeat(5), '1243', 'abce', 'Tiger-77']) {
-    assert.strictEqual(G.validatePassword(ok, '10101', '김하늘아'), null, JSON.stringify(ok));
+test('validatePassword: 규칙 없음(빈칸·문자열 아님·너무 긴 것만 거부)', () => {
+  for (const ok of ['a', '1234', '0000', '10101', '김하늘아', 'password', ' ', 'x'.repeat(100)]) {
+    assert.strictEqual(G.validatePassword(ok), null, JSON.stringify(ok));
   }
-  const weak = ['abc', 'a'.repeat(21), 'ab\ncd', 'ab\tcd', 'ab\u0000c', 5, null, undefined, ['abcd'],
-    'aaaa', '0000', '7777777', '1234', '4321', '123456789', '9876', 'abcd', 'DCBA', 'AbCdE',
-    'password', 'PassWord', 'qwer', 'QWERTY', 'asdf', '1q2w3e', '1111', '12345', 'abcd1234',
-    '10101', 'my10101', '10101ab', '김하늘아', '김 하늘 아'];
-  for (const bad of weak) {
-    assert.strictEqual(G.validatePassword(bad, '10101', '김하늘아'), 'WEAK_PASSWORD', JSON.stringify(bad));
+  for (const bad of ['', 5, null, undefined, ['abcd'], 'x'.repeat(101)]) {
+    assert.strictEqual(G.validatePassword(bad), 'WEAK_PASSWORD', JSON.stringify(bad));
   }
-  assert.strictEqual(G.validatePassword('김하늘아', '10101'), null, '이름을 안 주면 이름 비교 안 함');
   assert.strictEqual(G.isLocked(4), false);
   assert.strictEqual(G.isLocked(5), true);
   assert.strictEqual(G.LOCK_AFTER, 5);
@@ -1188,13 +1183,12 @@ test('register: 성공(세션 발급)·명단 없음·이름 불일치·중복·
   st.roster['10104'] = '';
   assert.strictEqual(pcall(deps, { action: 'register', studentId: '10104', name: '아무나', password: 'sea-PW-5678' }).code, 'NOT_IN_ROSTER');
   assert.strictEqual(pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sea-PW-5678' }).code, 'ALREADY_REGISTERED');
-  for (const pw of ['10102', 'x10102', 'abc', '1234', 'qwerty', '이바다']) {
-    assert.strictEqual(pcall(deps, { action: 'register', studentId: '10102', name: '이바다', password: pw }).code, 'WEAK_PASSWORD', pw);
-  }
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '10102', name: '이바다', password: '' }).code, 'WEAK_PASSWORD', '빈칸');
+  assert.strictEqual(pcall(deps, { action: 'register', studentId: '10103', name: '박구름', password: '1234' }).ok, true, '쉬운 비밀번호도 됨');
   assert.strictEqual(pcall(deps, { action: 'register', studentId: '10102', name: '', password: 'sea-PW-5678' }).code, 'BAD_REQUEST');
   assert.strictEqual(pcall(deps, { action: 'register', studentId: '40102', name: '이바다', password: 'sea-PW-5678' }).code, 'BAD_REQUEST');
   assert.strictEqual(pcall(deps, { action: 'register', studentId: '10102', name: '이바다', password: 1234 }).code, 'BAD_REQUEST');
-  assert.strictEqual(st.accounts.length, 1);
+  assert.strictEqual(st.accounts.length, 2, '10101 과 쉬운 비밀번호로 등록한 10103');
   st.cfg.roster_required = false;
   assert.strictEqual(pcall(deps, { action: 'register', studentId: '10109', name: '아무개', password: 'sea-PW-5678' }).ok, true, '명단 필수 아님');
   assert.strictEqual(st.locks, st.releases);
@@ -1252,30 +1246,31 @@ test('전체 오답이 1분에 40번 넘으면 BUSY', () => {
   assert.strictEqual(st.fails['10101'], undefined, 'BUSY 는 시도 횟수를 쓰지 않음');
 });
 
-test('선생님 초기화: 비밀번호가 학번이 되고 바로 제출 가능(변경 화면 없음), 예전 비밀번호·세션은 무효', () => {
+test('선생님 초기화: 학번으로 로그인하면 새 비밀번호를 먼저 정해야 함(학번 그대로는 안 됨), 예전 비밀번호·세션은 무효', () => {
   const { deps, st } = pwDeps();
   const reg = pcall(deps, { action: 'register', studentId: '10101', name: '김하늘', password: 'sky-PW-1234' });
   teacherReset(st, '10101', 60000);
-  // 초기화 전에 받은 세션은 무효
-  assert.strictEqual(pcall(deps, { action: 'list_mine', session: reg.session }).code, 'SESSION_EXPIRED');
+  assert.strictEqual(pcall(deps, { action: 'list_mine', session: reg.session }).code, 'SESSION_EXPIRED', '초기화 전 세션 무효');
   assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'sky-PW-1234' }).code, 'WRONG_PASSWORD', '예전 비밀번호 무효');
   const r = pcall(deps, { action: 'login', studentId: '10101', password: '10101' });
   assert.strictEqual(r.ok, true, JSON.stringify(r));
-  assert.strictEqual(r.mustChange, false);
-  assert.ok(typeof r.session === 'string' && r.session.length >= 16, '바로 세션 발급');
-  assert.strictEqual(pcall(deps, { action: 'submit', session: r.session, html: PAGE }).ok, true, '바로 제출');
-  assert.strictEqual(pcall(deps, { action: 'submit', studentId: '10101', password: '10101', html: PAGE + ' ' }).ok, true);
-  assert.strictEqual(pcall(deps, { action: 'list_mine', session: r.session }).items.length, 2);
-  // 몇 시간이 지나도 초기화(Y)가 남아 있으면 학번으로 로그인 가능
-  st.t += 6 * 3600 * 1000;
-  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: '10101' }).ok, true);
-  // 원하면 비밀번호를 바꿀 수 있고, 바꾸면 초기화 해제
-  const ch = pcall(deps, { action: 'change_password', studentId: '10101', password: '10101', newPassword: 'new-PW-9999' });
+  assert.strictEqual(r.mustChange, true, '새 비밀번호를 정해야 함');
+  assert.strictEqual(r.session, null, '세션 없음');
+  assert.strictEqual(pcall(deps, { action: 'submit', studentId: '10101', password: '10101', html: PAGE }).code, 'MUST_CHANGE_PASSWORD');
+  const same = pcall(deps, { action: 'change_password', studentId: '10101', password: '10101', newPassword: '10101' });
+  assert.strictEqual(same.code, 'WEAK_PASSWORD', '학번 그대로는 안 됨');
+  assert.ok(same.message.includes('다른'), same.message);
+  assert.strictEqual(pcall(deps, { action: 'change_password', studentId: '10101', password: '10101', newPassword: '' }).code, 'WEAK_PASSWORD');
+  const ch = pcall(deps, { action: 'change_password', studentId: '10101', password: '10101', newPassword: '1234' });
   assert.strictEqual(ch.ok, true, JSON.stringify(ch));
+  assert.strictEqual(ch.name, '김하늘');
+  assert.ok(typeof ch.session === 'string' && ch.session.length >= 16, '바꾸면 바로 세션');
+  assert.strictEqual(pcall(deps, { action: 'submit', session: ch.session, html: PAGE }).ok, true);
   assert.strictEqual(st.accounts[0].reset, false, '초기화 해제');
   assert.strictEqual(st.hashedInLock, false, '해시는 잠금 밖에서');
   assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: '10101' }).code, 'WRONG_PASSWORD');
-  assert.strictEqual(pcall(deps, { action: 'login', studentId: '10101', password: 'new-PW-9999' }).ok, true);
+  const again = pcall(deps, { action: 'login', studentId: '10101', password: '1234' });
+  assert.strictEqual(again.ok && again.mustChange === false && !!again.session, true, '다음부터는 새 비밀번호로 바로');
   assert.strictEqual(st.locks, st.releases);
 });
 

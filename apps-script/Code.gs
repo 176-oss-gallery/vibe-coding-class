@@ -48,9 +48,6 @@ var LOCK_AFTER = 5;     // 이 횟수만큼 틀리면 잠금
 var LOCK_SEC = 300;     // 잠금 유지 시간(초)
 var GLOBAL_FAIL_MAX = 40;   // 1분 동안 전체 오답이 이보다 많으면 BUSY
 var SESSION_TTL = 21600;    // 세션 유지(초)
-var WEAK_LIST = ['password', 'qwer', 'qwerty', 'asdf', '1q2w3e', '0000', '1111', '1234', '12345', '123456', 'abcd1234'];
-var PW_MIN = 4;
-var PW_MAX = 20;
 var PW_INPUT_MAX = 100; // 이보다 긴 입력은 형식 오류
 var GOOGLE_ACTIONS = ['whoami', 'bind'];
 var PASSWORD_ACTIONS = ['register', 'login', 'change_password'];
@@ -111,7 +108,7 @@ var MESSAGES = {
   ALREADY_REGISTERED: '이미 등록된 학번이에요. 본인이 등록한 게 아니면 선생님께 알려 주세요.',
   WRONG_PASSWORD: '비밀번호가 맞지 않아요.',
   LOCKED: '비밀번호를 여러 번 틀렸어요. 5분 뒤에 다시 하거나 선생님께 초기화를 부탁하세요.',
-  WEAK_PASSWORD: '비밀번호는 4~20자로 정해 주세요. 같은 글자 반복, 1234·abcd 같은 순서, 학번·이름이 들어간 것은 쓸 수 없어요.',
+  WEAK_PASSWORD: '비밀번호를 입력해 주세요.',
   MUST_CHANGE_PASSWORD: '새 비밀번호를 먼저 정해 주세요.',
   VOTE_CLOSED: '투표가 닫혔어요. 선생님께 물어보세요.',
   VOTE_NOT_READY: '아직 우리 반 작품 번호가 준비되지 않았어요. 선생님께 말해 주세요.',
@@ -119,6 +116,7 @@ var MESSAGES = {
   SELF_VOTE: '내 작품에는 투표할 수 없어요. 다른 친구의 작품을 골라 주세요.',
   SESSION_EXPIRED: '로그인이 끝났어요. 다시 로그인해 주세요.'
 };
+var MSG_SAME_PASSWORD = '지금 비밀번호(학번)와 다른 새 비밀번호를 정해 주세요.';
 var MSG_NAME_NOT_ROSTER = '이름이 명단과 달라요. 이름을 정확히 입력해 주세요.';
 var MSG_ROSTER_NO_NAME = '명단에 이름이 비어 있어 등록할 수 없어요. 선생님께 알려 주세요.';
 var MSG_NO_PEPPER = '서버 설정이 끝나지 않았어요. 선생님: setup() 을 실행해 주세요.';
@@ -343,28 +341,10 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
-// 비밀번호 규칙: 4~20자, 제어문자 없음, 너무 쉬운 것·학번 포함·이름과 같음 거부
-function validatePassword(pw, studentId, name) {
-  if (typeof pw !== 'string') return 'WEAK_PASSWORD';
-  if (pw.length < PW_MIN || pw.length > PW_MAX) return 'WEAK_PASSWORD';
-  if (/[\u0000-\u001f\u007f\u2028\u2029]/.test(pw)) return 'WEAK_PASSWORD';
-  var low = pw.toLowerCase();
-  if (/^([\s\S])\1*$/.test(pw)) return 'WEAK_PASSWORD';
-  if (isSequence_(low)) return 'WEAK_PASSWORD';
-  if (WEAK_LIST.indexOf(low) >= 0) return 'WEAK_PASSWORD';
-  var sid = String(studentId === null || studentId === undefined ? '' : studentId).trim();
-  if (sid && pw.indexOf(sid) >= 0) return 'WEAK_PASSWORD';
-  if (name !== undefined && name !== null && normName_(name) && normName_(name) === normName_(pw)) return 'WEAK_PASSWORD';
+// 비밀번호 규칙: 빈칸만 아니면 됨(학생들이 기억하기 쉽게 규칙을 두지 않음). 너무 긴 입력은 형식 오류로 따로 막음
+function validatePassword(pw) {
+  if (typeof pw !== 'string' || !pw.length || pw.length > PW_INPUT_MAX) return 'WEAK_PASSWORD';
   return null;
-}
-
-// 문자열 전체가 1씩 오르거나 내리는 숫자·영문 연속인지 (1234, 4321, abcd)
-function isSequence_(low) {
-  if (!/^(\d+|[a-z]+)$/.test(low) || low.length < 2) return false;
-  var step = low.charCodeAt(1) - low.charCodeAt(0);
-  if (step !== 1 && step !== -1) return false;
-  for (var i = 2; i < low.length; i++) if (low.charCodeAt(i) - low.charCodeAt(i - 1) !== step) return false;
-  return true;
 }
 
 function toMs_(v) {
@@ -484,7 +464,7 @@ function findAccount_(accounts, sid) {
 }
 
 // 학번+비밀번호 확인 → { acc, mustChange } 또는 { fail: 응답 }
-// 선생님 초기화(초기화=Y) 상태면 비밀번호는 학번. 학번은 비밀이 아니므로 학번별 잠금은 걸지 않음
+// 선생님 초기화(초기화=Y) 상태면 비밀번호는 학번이고, 로그인하면 새 비밀번호를 먼저 정해야 함(mustChange). 학번은 비밀이 아니므로 학번별 잠금은 걸지 않음
 // (초기화가 잠금 해제 역할도 함). 전체 오답 상한은 그대로 적용.
 function authPassword_(deps, sid, password, pepper) {
   var acc = findAccount_(deps.readAccounts() || [], sid);
@@ -503,7 +483,7 @@ function authPassword_(deps, sid, password, pepper) {
     return { fail: fail_('WRONG_PASSWORD') };
   }
   deps.clearFails(sid);
-  return { acc: acc, mustChange: false };
+  return { acc: acc, mustChange: !!acc.reset };
 }
 
 // 세션 토큰 → { acc } 또는 { fail }
@@ -648,7 +628,7 @@ function doRegister_(deps, cfg, req, sid, pepper) {
   if (typeof req.name !== 'string') return fail_('BAD_REQUEST');
   var name = sanitizeName(req.name);
   if (!name || name.length > NAME_MAX) return fail_('BAD_REQUEST');
-  if (validatePassword(req.password, sid, name)) return fail_('WEAK_PASSWORD');
+  if (validatePassword(req.password)) return fail_('WEAK_PASSWORD');
   // 해시는 전역 잠금 밖에서 계산
   var salt = String(deps.newSalt());
   var hash = hashPassword(req.password, salt, pepper, deps.sha256Hex, ITERATIONS);
@@ -675,7 +655,8 @@ function doRegister_(deps, cfg, req, sid, pepper) {
 
 function doChangePassword_(deps, req, sid, name, pepper) {
   var np = req.newPassword;
-  if (validatePassword(np, sid, name) || np === req.password) return fail_('WEAK_PASSWORD');
+  if (validatePassword(np)) return fail_('WEAK_PASSWORD');
+  if (np === req.password) return fail_('WEAK_PASSWORD', MSG_SAME_PASSWORD);
   // 해시는 전역 잠금 밖에서 계산
   var salt = String(deps.newSalt());
   var hash = hashPassword(np, salt, pepper, deps.sha256Hex, ITERATIONS);
@@ -686,7 +667,7 @@ function doChangePassword_(deps, req, sid, name, pepper) {
     deps.releaseLock();
   }
   deps.bumpSessionVersion(sid); // 예전 세션 모두 무효
-  return ok_({ studentId: sid, session: deps.newSession(sid) });
+  return ok_({ studentId: sid, name: name, session: deps.newSession(sid) });
 }
 
 function doWhoami_(deps, auth, email) {
@@ -1284,7 +1265,7 @@ var ADMIN_HTML = [
 '.nt h3 span{font-size:13px;font-weight:400;color:var(--mut)}.nt pre{margin:0;padding:12px;white-space:pre-wrap;word-break:break-word;font:inherit;font-size:14px;line-height:1.6;max-height:46vh;overflow:auto}.nt .none{padding:12px;color:var(--mut);font-size:14px}',
 '</style></head><body><main>',
 '<h1>수업 관리자</h1>',
-'<p class="sub">학생마다 제출했는지 먼저 보이고, [자세히]를 누르면 내용이 나옵니다. 비밀번호를 잊었거나 잠긴 학생은 [초기화]하면 비밀번호가 <b>학번</b>이 되고 잠금도 풀립니다.</p>',
+'<p class="sub">학생마다 제출했는지 먼저 보이고, [자세히]를 누르면 내용이 나옵니다. 비밀번호를 잊었거나 잠긴 학생은 [초기화]하면 잠금이 풀리고, 학생이 <b>학번</b>으로 로그인한 뒤 새 비밀번호를 정합니다.</p>',
 '<div class="bar" id="pwbar" hidden><label for="pw">관리자 비밀번호</label><input id="pw" type="password" autocomplete="off"><button class="p" id="pwgo">들어가기</button></div>',
 '<div id="pwmsg" role="status" aria-live="polite" class="sub"></div>',
 '<div id="app" hidden>',
@@ -1320,8 +1301,8 @@ var ADMIN_HTML = [
 ' var info=res.shown<res.total&&!$("q").value.trim()?" (앞에서 "+res.shown+"명만 표시)":"";',
 ' msg("등록 "+res.total+"명 중 "+res.rows.length+"명"+info+" · 1차시 "+k.t1+" · 게임 "+k.game+" · 2~3차시 "+k.t2+" · 투표 "+k.vote+" · 4차시 "+k.t3,"")}',
 'function load(){msg("불러오는 중…","");$("go").disabled=true;google.script.run.withSuccessHandler(function(r){$("go").disabled=false;render(r)}).withFailureHandler(function(e){$("go").disabled=false;msg("불러오지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminList($("q").value,PW)}',
-'function reset(r,b){if(!confirm(r.id+" "+r.name+" 학생의 비밀번호를 학번("+r.id+")으로 초기화할까요?\\n잠금도 풀리고, 지금 로그인된 화면은 끊깁니다."))return;b.disabled=true;msg(r.id+" 초기화하는 중…","");',
-' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){msg(r.id+" "+r.name+": 초기화했어요. 학생은 학번으로 로그인하면 됩니다.","ok");setTimeout(load,600)}else{b.disabled=false;msg("초기화하지 못했어요: "+(res&&res.message||"오류"),"bad")}})',
+'function reset(r,b){if(!confirm(r.id+" "+r.name+" 학생의 비밀번호를 학번("+r.id+")으로 초기화할까요?\\n잠금도 풀리고, 학생은 학번으로 로그인한 뒤 새 비밀번호를 정합니다."))return;b.disabled=true;msg(r.id+" 초기화하는 중…","");',
+' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){msg(r.id+" "+r.name+": 초기화했어요. 학생은 학번으로 로그인한 뒤 새 비밀번호를 정하면 됩니다.","ok");setTimeout(load,600)}else{b.disabled=false;msg("초기화하지 못했어요: "+(res&&res.message||"오류"),"bad")}})',
 ' .withFailureHandler(function(e){b.disabled=false;msg("초기화하지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminReset(r.id,PW)}',
 'var lastFocus=null;function closeDetail(){$("nov").classList.remove("on");if(lastFocus)lastFocus.focus()}',
 'function kv(dl,k,v){var t=document.createElement("dt");t.textContent=k;var d=document.createElement("dd");d.textContent=v;dl.appendChild(t);dl.appendChild(d)}',

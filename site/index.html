@@ -366,11 +366,11 @@ h3{scroll-margin-top:84px}
   <p class="sub" id="ahint" style="text-align:center"></p>
   <div class="fld"><label for="aid">학번 (5자리)</label><input type="text" id="aid" inputmode="numeric" maxlength="5" autocomplete="username"></div>
   <div class="fld" id="anamew"><label for="aname">이름 (정확히)</label><input type="text" id="aname" autocomplete="off"></div>
-  <div class="fld"><label for="apw">비밀번호</label><input type="password" id="apw" autocomplete="current-password"></div>
+  <div class="fld"><label for="apw" id="apwl">비밀번호</label><input type="password" id="apw" autocomplete="current-password"></div>
   <div class="fld" id="apw2w"><label for="apw2">비밀번호 한 번 더</label><input type="password" id="apw2" autocomplete="new-password"></div>
   <div id="aerr" role="alert" style="color:var(--bad);font-weight:700;min-height:24px;margin:6px 0"></div>
   <div class="row"><span style="flex:1"></span><button class="btn" type="button" id="acancel">닫기</button><button class="btn p" type="button" id="aok">로그인</button></div>
-  <p class="sub">비밀번호를 잊어버리거나 잠기면 선생님께 말하세요. 선생님이 초기화하면 <b>학번</b>이 비밀번호가 돼요.</p>
+  <p class="sub">비밀번호를 잊어버리거나 잠기면 선생님께 말하세요. 선생님이 초기화하면 <b>학번</b>으로 로그인한 뒤 새 비밀번호를 정해요.</p>
 </div></div>
 <div id="toast"></div>
 
@@ -430,11 +430,14 @@ async function sapi(action,payload){
   if(!r.ok&&r.code==='SESSION_EXPIRED'){A.session=null;refresh();openAuth('login','로그인 시간이 지났어요. 다시 로그인해 주세요.')}
   return r}
 let amode='login';
-function setAuthMode(m){amode=m;const reg=m==='register';
-  $('at').textContent=reg?'처음 등록':'로그인';$('anamew').hidden=!reg;$('apw2w').hidden=!reg;
-  $('aok').textContent=reg?'등록하고 로그인':'로그인';$('amlogin').className='btn'+(reg?'':' p');$('amreg').className='btn'+(reg?' p':'');
-  $('ahint').textContent=reg?'처음 한 번만 등록해요. 비밀번호는 4~20자, 나만 아는 것으로 정하세요. 쉬운 비밀번호(1234 등)나 학번·이름이 들어간 비밀번호는 안 돼요.':'등록했던 학번과 비밀번호를 입력하세요.';
-  $('apw').autocomplete=reg?'new-password':'current-password'}
+let PEND=null; // 초기화된 학생: 학번으로 로그인한 뒤 새 비밀번호를 정하는 중 {sid, pw}
+function setAuthMode(m){amode=m;const reg=m==='register',chg=m==='change';
+  $('at').textContent=chg?'새 비밀번호 정하기':reg?'처음 등록':'로그인';$('anamew').hidden=!reg;$('apw2w').hidden=!(reg||chg);
+  $('aok').textContent=chg?'새 비밀번호로 로그인':reg?'등록하고 로그인':'로그인';$('amlogin').className='btn'+(reg||chg?'':' p');$('amreg').className='btn'+(reg?' p':'');
+  $('amlogin').parentElement.hidden=chg;$('aid').readOnly=chg;
+  $('apwl').textContent=chg?'새 비밀번호':'비밀번호';
+  $('ahint').textContent=chg?'선생님이 비밀번호를 초기화했어요. 앞으로 쓸 새 비밀번호를 정하세요(학번은 안 돼요).':reg?'처음 한 번만 등록해요. 비밀번호는 내가 기억하기 쉬운 것으로 정하세요.':'등록했던 학번과 비밀번호를 입력하세요.';
+  $('apw').autocomplete=reg||chg?'new-password':'current-password';if(!chg)PEND=null}
 function openAuth(m,msg){setAuthMode(m||'login');$('aerr').textContent=msg||'';$('aid').value=A.sid||S.f.sid||'';$('apw').value='';$('apw2').value='';
   $('aov').classList.add('on');document.body.style.overflow='hidden';setTimeout(()=>{($('aid').value?$('apw'):$('aid')).focus()},50)}
 function closeAuth(){$('aov').classList.remove('on');document.body.style.overflow=''}
@@ -446,11 +449,18 @@ async function doAuth(){
   if(!pw)return err('비밀번호를 입력하세요');
   let name='';
   if(amode==='register'){name=$('aname').value.trim();if(!name)return err('이름을 입력하세요');if(pw!==$('apw2').value)return err('비밀번호 두 칸이 서로 달라요')}
+  if(amode==='change'){if(pw!==$('apw2').value)return err('비밀번호 두 칸이 서로 달라요');if(pw===id)return err('학번이 아닌 새 비밀번호를 정해 주세요')}
   $('aok').disabled=true;err('확인하는 중… (몇 초 걸릴 수 있어요)');
   if(amode==='register'){const r0=await api('register',{studentId:id,name,password:pw});if(!r0.ok){$('aok').disabled=false;return err(r0.message)}}
-  const r=await api('login',{studentId:id,password:pw});$('aok').disabled=false;
+  let r;
+  if(amode==='change'&&PEND){r=await api('change_password',{studentId:PEND.sid,password:PEND.pw,newPassword:pw})}
+  else r=await api('login',{studentId:id,password:pw});
+  $('aok').disabled=false;
   if(!r.ok)return err(r.message);
+  if(r.data.mustChange){PEND={sid:id,pw};setAuthMode('change');$('apw').value='';$('apw2').value='';err('');$('apw').focus();return}
   if(!r.data.session)return err('로그인하지 못했어요. 선생님께 말해 주세요.');
+  if(amode==='change')toast('새 비밀번호를 정했어요. 다음부터는 새 비밀번호로 로그인하세요.',3500);
+  PEND=null;
   if(S.f.sid&&S.f.sid!==id){
     if(!confirm('이 컴퓨터에는 '+S.f.sid+' 학생의 기록이 남아 있어요.\n지우고 '+id+' 학생으로 새로 시작할까요?\n(남은 기록은 사라져요)'))return err('로그인을 취소했어요.');
     resetLocal()}

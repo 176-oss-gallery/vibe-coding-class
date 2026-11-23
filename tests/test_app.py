@@ -23,6 +23,7 @@ class Fake:
         s.accounts, s.notes, s.votes, s.subs, s.calls = {}, [], [], [], []
         s.fail_submit, s.expire, s.vote_open = None, False, True
         s.my_number = 2  # 가짜 명단: 이 학생 작품은 2번
+        s.resets = set()  # 선생님이 초기화한 학번(비밀번호=학번)
 
     def handle(s, body):
         a = body.get('action'); s.calls.append(body)
@@ -36,7 +37,14 @@ class Fake:
             acc = s.accounts.get(body['studentId'])
             if not acc: return bad('NOT_REGISTERED', '아직 등록하지 않은 학번이에요. 먼저 등록해 주세요.')
             if acc[1] != body['password']: return bad('WRONG_PASSWORD', '비밀번호가 맞지 않아요.')
+            if body['studentId'] in s.resets: return o(studentId=body['studentId'], name=acc[0], mustChange=True, session=None)
             return o(studentId=body['studentId'], name=acc[0], mustChange=False, session='S' + body['studentId'] + 'x' * 20)
+        if a == 'change_password':
+            sid = body['studentId']; acc = s.accounts.get(sid)
+            if not acc or acc[1] != body['password']: return bad('WRONG_PASSWORD', '비밀번호가 맞지 않아요.')
+            if body['newPassword'] == body['password']: return bad('WEAK_PASSWORD', '지금 비밀번호(학번)와 다른 새 비밀번호를 정해 주세요.')
+            s.accounts[sid] = (acc[0], body['newPassword']); s.resets.discard(sid)
+            return o(studentId=sid, name=acc[0], session='S' + sid + 'x' * 20)
         sess = body.get('session') or ''
         if s.expire or not sess.startswith('S'): return bad('SESSION_EXPIRED', '로그인이 만료되었어요.')
         sid = sess[1:6]
@@ -283,6 +291,18 @@ with sync_playwright() as p:
     pg.click('#aok'); pg.wait_for_selector('#aov:not(.on)', state='attached')
     pg.remove_listener('dialog', on_dialog)
     ok('확인하면 이전 학생 기록 비우고 새 학생으로', pg.input_value('#sid') == '10107' and pg.input_value('[data-k=title]') == '' and pg.inner_text('#pchip') == '서약 전')
+    # 선생님이 초기화한 학생: 학번으로 로그인하면 새 비밀번호부터 정함
+    fake.accounts['10120'] = ('최초기', '10120'); fake.resets.add('10120')
+    pg.on('dialog', lambda dlg: dlg.accept())
+    pg.click('#logoutbtn'); auth(pg, '10120', '10120'); pg.wait_for_function('document.getElementById("at").innerText.includes("새 비밀번호")')
+    ok('초기화 학생: 새 비밀번호 정하기 창', is_on(pg, '#aov') and pg.is_visible('#apw2') and pg.get_attribute('#aid', 'readonly') is not None, pg.inner_text('#at'))
+    pg.fill('#apw', '10120'); pg.fill('#apw2', '10120'); pg.click('#aok')
+    ok('초기화 학생: 학번 그대로는 막힘', '학번이 아닌' in pg.inner_text('#aerr'), pg.inner_text('#aerr'))
+    pg.fill('#apw', '1'); pg.fill('#apw2', '2'); pg.click('#aok'); ok('초기화 학생: 두 칸 다르면 막힘', '서로 달라요' in pg.inner_text('#aerr'))
+    pg.fill('#apw', '1'); pg.fill('#apw2', '1'); pg.click('#aok'); pg.wait_for_selector('#aov:not(.on)', state='attached')
+    ok('초기화 학생: 짧은 새 비밀번호로도 바로 로그인', pg.input_value('#sid') == '10120' and fake.accounts['10120'][1] == '1' and '10120' not in fake.resets)
+    pg.click('#logoutbtn'); auth(pg, '10120', '1'); pg.wait_for_selector('#aov:not(.on)', state='attached')
+    ok('초기화 학생: 다음부터는 새 비밀번호로 바로 로그인', pg.input_value('#sid') == '10120')
     errs = [e for e in errs if 'Failed to load resource' not in e]
     # 모바일 로그인 창
     ctx2 = b.new_context(viewport={'width': 390, 'height': 780}, has_touch=True, is_mobile=True)
