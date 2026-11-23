@@ -22,6 +22,8 @@ class Fake:
     def __init__(s):
         s.accounts, s.notes, s.votes, s.subs, s.calls = {}, [], [], [], []
         s.fail_submit, s.expire, s.vote_open = None, False, True
+        s.my_number = 2  # 가짜 명단: 이 학생 작품은 2번
+        s.resets = set()  # 선생님이 초기화한 학번(비밀번호=학번)
 
     def handle(s, body):
         a = body.get('action'); s.calls.append(body)
@@ -35,22 +37,30 @@ class Fake:
             acc = s.accounts.get(body['studentId'])
             if not acc: return bad('NOT_REGISTERED', '아직 등록하지 않은 학번이에요. 먼저 등록해 주세요.')
             if acc[1] != body['password']: return bad('WRONG_PASSWORD', '비밀번호가 맞지 않아요.')
+            if body['studentId'] in s.resets: return o(studentId=body['studentId'], name=acc[0], mustChange=True, session=None)
             return o(studentId=body['studentId'], name=acc[0], mustChange=False, session='S' + body['studentId'] + 'x' * 20)
+        if a == 'change_password':
+            sid = body['studentId']; acc = s.accounts.get(sid)
+            if not acc or acc[1] != body['password']: return bad('WRONG_PASSWORD', '비밀번호가 맞지 않아요.')
+            if body['newPassword'] == body['password']: return bad('WEAK_PASSWORD', '지금 비밀번호(학번)와 다른 새 비밀번호를 정해 주세요.')
+            s.accounts[sid] = (acc[0], body['newPassword']); s.resets.discard(sid)
+            return o(studentId=sid, name=acc[0], session='S' + sid + 'x' * 20)
         sess = body.get('session') or ''
         if s.expire or not sess.startswith('S'): return bad('SESSION_EXPIRED', '로그인이 만료되었어요.')
         sid = sess[1:6]
         if a == 'note': s.notes.append((sid, body['section'], body['text'])); return o(section=body['section'], savedAt=iso(), length=len(body['text']))
         if a == 'vote':
             if not s.vote_open: return bad('VOTE_CLOSED', '투표가 닫혔어요. 선생님께 물어보세요.')
-            s.votes.append((sid, body['votes'])); return o(savedAt=iso(), votes=body['votes'])
+            if body.get('pick') == s.my_number: return bad('SELF_VOTE', '내 작품에는 투표할 수 없어요. 다른 친구의 작품을 골라 주세요.')
+            s.votes.append((sid, body['pick'])); return o(savedAt=iso(), pick=body['pick'])
         if a == 'submit':
             if s.fail_submit: return bad(*s.fail_submit)
             s.subs.append((sid, body['html'], body['requestId']))
             return o(studentId=sid, version=len([x for x in s.subs if x[0] == sid]), size=len(body['html']), sha256='x', submittedAt=iso())
         if a == 'status':
             notes = {sec: iso() for (i, sec, t) in s.notes if i == sid}
-            vote = next(({'at': iso(), 'votes': v} for (i, v) in reversed(s.votes) if i == sid), None)
-            return o(notes=notes, vote=vote, voteOpen=s.vote_open, sessionOpen=True)
+            vote = next(({'at': iso(), 'pick': v} for (i, v) in reversed(s.votes) if i == sid), None)
+            return o(notes=notes, vote=vote, voteOpen=s.vote_open, sessionOpen=True, galleryReady=True, myNumber=s.my_number)
         return bad('BAD_REQUEST', '요청 형식이 올바르지 않아요.')
 
 
@@ -230,13 +240,16 @@ with sync_playwright() as p:
     # 4차시
     pg.click('#nav button[data-t=t3]'); ok('4차시 탭에 갤러리 iframe', pg.locator('#galframe').count() == 1)
     ok('구글 폼 링크 없음', pg.locator('a[href*="forms.gle"]').count() == 0 and pg.locator('[data-link]').count() == 0)
-    pg.click('#vbtn'); ok('투표: 빈 칸 막힘', '모두' in pg.inner_text('#vstate'))
-    for k, n in (('sci', 1), ('fun', 2), ('creative', 3), ('practical', 50)): pg.fill('#v_' + k, str(n))
-    pg.click('#vbtn'); pg.wait_for_function('document.getElementById("vstate").innerText.includes("없는 번호")')
+    pg.click('#vbtn'); ok('투표: 빈 칸 막힘', '1~99' in pg.inner_text('#vstate'))
+    ok('투표: 내 작품 번호 안내', pg.is_visible('#vmine') and '2번' in pg.inner_text('#vmine'), pg.inner_text('#vmine'))
+    pg.fill('#v_pick', '50'); pg.click('#vbtn'); pg.wait_for_function('document.getElementById("vstate").innerText.includes("없는 번호")')
     ok('투표: 우리 반 갤러리에 없는 번호 막힘', '50' in pg.inner_text('#vstate') and not fake.votes, pg.inner_text('#vstate'))
-    pg.fill('#v_practical', '4'); pg.click('#vbtn'); pg.wait_for_function('document.getElementById("vstate").innerText.includes("투표했어요")')
-    ok('투표 전달: 네 부문 번호, 반·학번은 보내지 않음', fake.votes and fake.votes[-1][1] == {'sci': 1, 'fun': 2, 'creative': 3, 'practical': 4}
-       and all('cls' not in c and 'studentId' not in c for c in fake.calls if c['action'] == 'vote'))
+    n_calls = len(fake.calls)
+    pg.fill('#v_pick', '2'); pg.click('#vbtn'); pg.wait_for_function('document.getElementById("vstate").innerText.includes("내 작품")')
+    ok('투표: 내 작품은 앱이 먼저 막음(서버에 안 보냄)', not fake.votes and len(fake.calls) == n_calls, pg.inner_text('#vstate'))
+    pg.fill('#v_pick', '4'); pg.click('#vbtn'); pg.wait_for_function('document.getElementById("vstate").innerText.includes("투표했어요")')
+    ok('투표 전달: 번호 하나만, 반·학번은 보내지 않음', fake.votes and fake.votes[-1][1] == 4 and '4번에 투표' in pg.inner_text('#vstate')
+       and all(set(c) <= {'action', 'session', 'pick'} for c in fake.calls if c['action'] == 'vote'))
     fake.vote_open = False
     pg.click('#vbtn'); pg.wait_for_function('document.getElementById("vstate").innerText.includes("❌")')
     ok('투표가 닫히면 이유 표시', '닫혔어요' in pg.inner_text('#vstate'), pg.inner_text('#vstate'))
@@ -261,8 +274,8 @@ with sync_playwright() as p:
     ok('새로고침 후 서약 유지', pg.inner_text('#pchip') == '서약 완료')
     pg.wait_for_function('document.getElementById("ns_t1").innerText.includes("제출함")')
     ok('다시 로그인하면 제출 현황 복원', '제출함' in pg.inner_text('#ns_t1'))
-    pg.click('#nav button[data-t=t3]'); pg.wait_for_function('document.getElementById("v_sci").value!==""')
-    ok('투표 현황 복원', pg.input_value('#v_practical') == '4')
+    pg.click('#nav button[data-t=t3]'); pg.wait_for_function('document.getElementById("v_pick").value!==""')
+    ok('투표 현황 복원', pg.input_value('#v_pick') == '4' and '4번에 투표함' in pg.inner_text('#vstate'), pg.inner_text('#vstate'))
     # 같은 컴퓨터에서 다른 학생이 로그인
     fake.accounts['10107'] = ('이서준', 'green-Forest-9q')
     msgs, answer = [], {'accept': False}
@@ -278,6 +291,18 @@ with sync_playwright() as p:
     pg.click('#aok'); pg.wait_for_selector('#aov:not(.on)', state='attached')
     pg.remove_listener('dialog', on_dialog)
     ok('확인하면 이전 학생 기록 비우고 새 학생으로', pg.input_value('#sid') == '10107' and pg.input_value('[data-k=title]') == '' and pg.inner_text('#pchip') == '서약 전')
+    # 선생님이 초기화한 학생: 학번으로 로그인하면 새 비밀번호부터 정함
+    fake.accounts['10120'] = ('최초기', '10120'); fake.resets.add('10120')
+    pg.on('dialog', lambda dlg: dlg.accept())
+    pg.click('#logoutbtn'); auth(pg, '10120', '10120'); pg.wait_for_function('document.getElementById("at").innerText.includes("새 비밀번호")')
+    ok('초기화 학생: 새 비밀번호 정하기 창', is_on(pg, '#aov') and pg.is_visible('#apw2') and pg.get_attribute('#aid', 'readonly') is not None, pg.inner_text('#at'))
+    pg.fill('#apw', '10120'); pg.fill('#apw2', '10120'); pg.click('#aok')
+    ok('초기화 학생: 학번 그대로는 막힘', '학번이 아닌' in pg.inner_text('#aerr'), pg.inner_text('#aerr'))
+    pg.fill('#apw', '1'); pg.fill('#apw2', '2'); pg.click('#aok'); ok('초기화 학생: 두 칸 다르면 막힘', '서로 달라요' in pg.inner_text('#aerr'))
+    pg.fill('#apw', '1'); pg.fill('#apw2', '1'); pg.click('#aok'); pg.wait_for_selector('#aov:not(.on)', state='attached')
+    ok('초기화 학생: 짧은 새 비밀번호로도 바로 로그인', pg.input_value('#sid') == '10120' and fake.accounts['10120'][1] == '1' and '10120' not in fake.resets)
+    pg.click('#logoutbtn'); auth(pg, '10120', '1'); pg.wait_for_selector('#aov:not(.on)', state='attached')
+    ok('초기화 학생: 다음부터는 새 비밀번호로 바로 로그인', pg.input_value('#sid') == '10120')
     errs = [e for e in errs if 'Failed to load resource' not in e]
     # 모바일 로그인 창
     ctx2 = b.new_context(viewport={'width': 390, 'height': 780}, has_touch=True, is_mobile=True)

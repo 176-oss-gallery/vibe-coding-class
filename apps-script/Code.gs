@@ -48,9 +48,6 @@ var LOCK_AFTER = 5;     // 이 횟수만큼 틀리면 잠금
 var LOCK_SEC = 300;     // 잠금 유지 시간(초)
 var GLOBAL_FAIL_MAX = 40;   // 1분 동안 전체 오답이 이보다 많으면 BUSY
 var SESSION_TTL = 21600;    // 세션 유지(초)
-var WEAK_LIST = ['password', 'qwer', 'qwerty', 'asdf', '1q2w3e', '0000', '1111', '1234', '12345', '123456', 'abcd1234'];
-var PW_MIN = 4;
-var PW_MAX = 20;
 var PW_INPUT_MAX = 100; // 이보다 긴 입력은 형식 오류
 var GOOGLE_ACTIONS = ['whoami', 'bind'];
 var PASSWORD_ACTIONS = ['register', 'login', 'change_password'];
@@ -59,8 +56,6 @@ var SHARED_ACTIONS = ['submit', 'list_mine'];
 var SESSION_ACTIONS = ['note', 'vote', 'status'];
 var NOTE_SECTIONS = ['t1', 't2', 't3'];
 var NOTE_MAX = 30000; // 글 한 칸(구글 시트 한 셀은 5만 자까지)
-var VOTE_KEYS = ['sci', 'fun', 'creative', 'practical']; // 정확·재미·창의·실용
-var VOTE_LABELS = { sci: '정확', fun: '재미', creative: '창의', practical: '실용' };
 var BODY_EXTRA = 64 * 1024;
 var BODY_HARD_MAX = 8 * 1024 * 1024; // 설정을 읽기 전 절대 상한
 var REQUEST_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
@@ -78,10 +73,11 @@ var SHEETS = {
   Config: ['키', '값'],
   Accounts: ['학번', '이름', '비밀번호해시', '솔트', '등록시각', '초기화', '변경시각', '초기화시각'],
   Notes: ['시각', '학번', '구간', '글'],
-  Votes: ['시각', '학번', '반', '정확', '재미', '창의', '실용']
+  Votes: ['시각', '학번', '반', '번호'],
+  Gallery: ['학번', '반', '번호'] // 갤러리 작품 번호 명단(관리자가 올림). 자기 작품 투표를 막는 데 씀
 };
 // 텍스트 서식 열 (1부터): 학번·파일ID·해시·요청ID (숫자/지수로 바뀌지 않게)
-var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8], Accounts: [1, 3, 4], Notes: [2, 3, 4], Votes: [2, 3] };
+var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8], Accounts: [1, 3, 4], Notes: [2, 3, 4], Votes: [2], Gallery: [1] };
 
 var CONFIG_DEFAULTS = [
   ['auth_mode', 'password'],   // password | google
@@ -112,11 +108,15 @@ var MESSAGES = {
   ALREADY_REGISTERED: '이미 등록된 학번이에요. 본인이 등록한 게 아니면 선생님께 알려 주세요.',
   WRONG_PASSWORD: '비밀번호가 맞지 않아요.',
   LOCKED: '비밀번호를 여러 번 틀렸어요. 5분 뒤에 다시 하거나 선생님께 초기화를 부탁하세요.',
-  WEAK_PASSWORD: '비밀번호는 4~20자로 정해 주세요. 같은 글자 반복, 1234·abcd 같은 순서, 학번·이름이 들어간 것은 쓸 수 없어요.',
+  WEAK_PASSWORD: '비밀번호를 입력해 주세요.',
   MUST_CHANGE_PASSWORD: '새 비밀번호를 먼저 정해 주세요.',
   VOTE_CLOSED: '투표가 닫혔어요. 선생님께 물어보세요.',
+  VOTE_NOT_READY: '아직 우리 반 작품 번호가 준비되지 않았어요. 선생님께 말해 주세요.',
+  NOT_IN_GALLERY: '우리 반 갤러리에 없는 번호예요. 번호를 다시 확인해 주세요.',
+  SELF_VOTE: '내 작품에는 투표할 수 없어요. 다른 친구의 작품을 골라 주세요.',
   SESSION_EXPIRED: '로그인이 끝났어요. 다시 로그인해 주세요.'
 };
+var MSG_SAME_PASSWORD = '지금 비밀번호(학번)와 다른 새 비밀번호를 정해 주세요.';
 var MSG_NAME_NOT_ROSTER = '이름이 명단과 달라요. 이름을 정확히 입력해 주세요.';
 var MSG_ROSTER_NO_NAME = '명단에 이름이 비어 있어 등록할 수 없어요. 선생님께 알려 주세요.';
 var MSG_NO_PEPPER = '서버 설정이 끝나지 않았어요. 선생님: setup() 을 실행해 주세요.';
@@ -341,28 +341,10 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
-// 비밀번호 규칙: 4~20자, 제어문자 없음, 너무 쉬운 것·학번 포함·이름과 같음 거부
-function validatePassword(pw, studentId, name) {
-  if (typeof pw !== 'string') return 'WEAK_PASSWORD';
-  if (pw.length < PW_MIN || pw.length > PW_MAX) return 'WEAK_PASSWORD';
-  if (/[\u0000-\u001f\u007f\u2028\u2029]/.test(pw)) return 'WEAK_PASSWORD';
-  var low = pw.toLowerCase();
-  if (/^([\s\S])\1*$/.test(pw)) return 'WEAK_PASSWORD';
-  if (isSequence_(low)) return 'WEAK_PASSWORD';
-  if (WEAK_LIST.indexOf(low) >= 0) return 'WEAK_PASSWORD';
-  var sid = String(studentId === null || studentId === undefined ? '' : studentId).trim();
-  if (sid && pw.indexOf(sid) >= 0) return 'WEAK_PASSWORD';
-  if (name !== undefined && name !== null && normName_(name) && normName_(name) === normName_(pw)) return 'WEAK_PASSWORD';
+// 비밀번호 규칙: 빈칸만 아니면 됨(학생들이 기억하기 쉽게 규칙을 두지 않음). 너무 긴 입력은 형식 오류로 따로 막음
+function validatePassword(pw) {
+  if (typeof pw !== 'string' || !pw.length || pw.length > PW_INPUT_MAX) return 'WEAK_PASSWORD';
   return null;
-}
-
-// 문자열 전체가 1씩 오르거나 내리는 숫자·영문 연속인지 (1234, 4321, abcd)
-function isSequence_(low) {
-  if (!/^(\d+|[a-z]+)$/.test(low) || low.length < 2) return false;
-  var step = low.charCodeAt(1) - low.charCodeAt(0);
-  if (step !== 1 && step !== -1) return false;
-  for (var i = 2; i < low.length; i++) if (low.charCodeAt(i) - low.charCodeAt(i - 1) !== step) return false;
-  return true;
 }
 
 function toMs_(v) {
@@ -482,7 +464,7 @@ function findAccount_(accounts, sid) {
 }
 
 // 학번+비밀번호 확인 → { acc, mustChange } 또는 { fail: 응답 }
-// 선생님 초기화(초기화=Y) 상태면 비밀번호는 학번. 학번은 비밀이 아니므로 학번별 잠금은 걸지 않음
+// 선생님 초기화(초기화=Y) 상태면 비밀번호는 학번이고, 로그인하면 새 비밀번호를 먼저 정해야 함(mustChange). 학번은 비밀이 아니므로 학번별 잠금은 걸지 않음
 // (초기화가 잠금 해제 역할도 함). 전체 오답 상한은 그대로 적용.
 function authPassword_(deps, sid, password, pepper) {
   var acc = findAccount_(deps.readAccounts() || [], sid);
@@ -501,7 +483,7 @@ function authPassword_(deps, sid, password, pepper) {
     return { fail: fail_('WRONG_PASSWORD') };
   }
   deps.clearFails(sid);
-  return { acc: acc, mustChange: false };
+  return { acc: acc, mustChange: !!acc.reset };
 }
 
 // 세션 토큰 → { acc } 또는 { fail }
@@ -579,32 +561,48 @@ function doNote_(deps, cfg, req, sid) {
   return ok_({ section: req.section, savedAt: at.toISOString(), length: text.length });
 }
 
-// 4차시 투표: 정확·재미·창의·실용 각각 작품 번호(1~99). 반은 로그인한 학번에서 정함. 다시 내면 가장 나중 것이 쓰임
-function parseVotes_(v) {
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
-  var out = {};
-  for (var i = 0; i < VOTE_KEYS.length; i++) {
-    var n = v[VOTE_KEYS[i]];
-    if (typeof n === 'string' && /^\d{1,2}$/.test(n.trim())) n = Number(n.trim());
-    if (typeof n !== 'number' || n !== Math.floor(n) || n < 1 || n > 99) return null;
-    out[VOTE_KEYS[i]] = n;
-  }
-  return out;
+// 4차시 투표: 가장 마음에 드는 작품 번호 하나(1~99). 반은 로그인한 학번에서 정함. 다시 내면 가장 나중 것이 쓰임
+// 작품 번호 명단(Gallery)에 있는 우리 반 번호만 받고, 내 작품 번호는 막는다. 명단이 없으면 투표를 받지 않음
+function parsePick_(v) {
+  if (typeof v === 'string' && /^\d{1,2}$/.test(v.trim())) v = Number(v.trim());
+  if (typeof v !== 'number' || v !== Math.floor(v) || v < 1 || v > 99) return null;
+  return v;
+}
+
+// 학번의 반 번호(갤러리는 반 번호로 나뉨)
+function classNo_(sid) {
+  return Number(String(sid).slice(1, 3));
+}
+
+// 순수: 이 학생 반의 작품 번호들과 이 학생 작품 번호
+function galleryFor_(gallery, sid) {
+  var c = classNo_(sid), mine = null, nums = [];
+  (gallery || []).forEach(function (g) {
+    if (Number(g.cls) !== c) return;
+    var n = Number(g.n);
+    nums.push(n);
+    if (String(g.id).trim() === sid) mine = n;
+  });
+  return { nums: nums, mine: mine };
 }
 
 function doVote_(deps, cfg, req, sid) {
-  var votes = parseVotes_(req.votes);
-  if (!votes) return fail_('BAD_REQUEST');
+  var pick = parsePick_(req.pick);
+  if (pick === null) return fail_('BAD_REQUEST');
   if (!cfg.vote_open) return fail_('VOTE_CLOSED');
+  var g = galleryFor_(deps.readGallery(), sid);
+  if (!g.nums.length) return fail_('VOTE_NOT_READY');
+  if (g.mine === pick) return fail_('SELF_VOTE');
+  if (g.nums.indexOf(pick) < 0) return fail_('NOT_IN_GALLERY');
   if (!deps.rateLimit('vote:' + sid, cfg.submit_per_minute)) return fail_('BUSY', MSG_RATE_LIMITED);
   var at = deps.now();
   if (!deps.tryLock()) return fail_('BUSY');
   try {
-    deps.appendVote({ at: at, id: sid, cls: sid.slice(0, 3), votes: votes });
+    deps.appendVote({ at: at, id: sid, cls: classNo_(sid), pick: pick });
   } finally {
     deps.releaseLock();
   }
-  return ok_({ savedAt: at.toISOString(), votes: votes });
+  return ok_({ savedAt: at.toISOString(), pick: pick });
 }
 
 // 내 제출 현황: 글 구간별 마지막 저장 시각, 마지막 투표, 투표 열림 여부 (글 내용은 돌려주지 않음)
@@ -619,16 +617,18 @@ function doStatus_(deps, cfg, sid) {
   (deps.readVotes() || []).forEach(function (r) {
     if (String(r.id).trim() !== sid) return;
     var t = toMs_(r.at);
-    if (isFinite(t) && (!vote || t > toMs_(vote.at))) vote = { at: new Date(t).toISOString(), votes: r.votes };
+    if (isFinite(t) && (!vote || t > toMs_(vote.at))) vote = { at: new Date(t).toISOString(), pick: r.pick };
   });
-  return ok_({ notes: notes, vote: vote, voteOpen: !!cfg.vote_open, sessionOpen: !!cfg.session_open });
+  var g = galleryFor_(deps.readGallery(), sid);
+  return ok_({ notes: notes, vote: vote, voteOpen: !!cfg.vote_open, sessionOpen: !!cfg.session_open,
+    galleryReady: g.nums.length > 0, myNumber: g.mine });
 }
 
 function doRegister_(deps, cfg, req, sid, pepper) {
   if (typeof req.name !== 'string') return fail_('BAD_REQUEST');
   var name = sanitizeName(req.name);
   if (!name || name.length > NAME_MAX) return fail_('BAD_REQUEST');
-  if (validatePassword(req.password, sid, name)) return fail_('WEAK_PASSWORD');
+  if (validatePassword(req.password)) return fail_('WEAK_PASSWORD');
   // 해시는 전역 잠금 밖에서 계산
   var salt = String(deps.newSalt());
   var hash = hashPassword(req.password, salt, pepper, deps.sha256Hex, ITERATIONS);
@@ -655,7 +655,8 @@ function doRegister_(deps, cfg, req, sid, pepper) {
 
 function doChangePassword_(deps, req, sid, name, pepper) {
   var np = req.newPassword;
-  if (validatePassword(np, sid, name) || np === req.password) return fail_('WEAK_PASSWORD');
+  if (validatePassword(np)) return fail_('WEAK_PASSWORD');
+  if (np === req.password) return fail_('WEAK_PASSWORD', MSG_SAME_PASSWORD);
   // 해시는 전역 잠금 밖에서 계산
   var salt = String(deps.newSalt());
   var hash = hashPassword(np, salt, pepper, deps.sha256Hex, ITERATIONS);
@@ -666,7 +667,7 @@ function doChangePassword_(deps, req, sid, name, pepper) {
     deps.releaseLock();
   }
   deps.bumpSessionVersion(sid); // 예전 세션 모두 무효
-  return ok_({ studentId: sid, session: deps.newSession(sid) });
+  return ok_({ studentId: sid, name: name, session: deps.newSession(sid) });
 }
 
 function doWhoami_(deps, auth, email) {
@@ -852,36 +853,34 @@ function classLabel_(key) {
   return Number(key.charAt(0)) + '학년 ' + Number(key.slice(1)) + '반';
 }
 
-// 순수: 투표 집계. 투표자마다 가장 나중 한 번만 세고, 반별·부문별로 작품 번호 득표 수를 센다
-function adminTally(votes) {
+// 순수: 투표자마다 가장 나중 한 번
+function latestVotes_(votes) {
   var latest = {};
   (votes || []).forEach(function (v) {
     var id = String(v.id).trim();
     var t = toMs_(v.at);
-    if (!validateStudentId(id) || !v.votes) return;
+    if (!validateStudentId(id) || !isFinite(Number(v.pick)) || !Number(v.pick)) return;
     if (!latest[id] || (isFinite(t) && t >= toMs_(latest[id].at))) latest[id] = v;
   });
+  return latest;
+}
+
+// 순수: 투표 집계. 반(반 번호)마다 투표한 학생 수와 많이 받은 작품 번호 순
+function adminTally(votes) {
+  var latest = latestVotes_(votes);
   var byClass = {};
-  Object.keys(latest).sort().forEach(function (id) {
-    var key = id.slice(0, 3);
-    var c = byClass[key] || (byClass[key] = { key: key, label: classLabel_(key), voters: 0, cats: {} });
-    c.voters++;
-    VOTE_KEYS.forEach(function (k) {
-      var n = Number(latest[id].votes[k]);
-      if (!isFinite(n)) return;
-      var m = c.cats[k] || (c.cats[k] = {});
-      m[n] = (m[n] || 0) + 1;
-    });
+  Object.keys(latest).forEach(function (id) {
+    var c = classNo_(id);
+    var x = byClass[c] || (byClass[c] = { voters: 0, m: {} });
+    x.voters++;
+    var n = Number(latest[id].pick);
+    x.m[n] = (x.m[n] || 0) + 1;
   });
-  return Object.keys(byClass).sort().map(function (key) {
-    var c = byClass[key];
-    var cats = {};
-    VOTE_KEYS.forEach(function (k) {
-      var m = c.cats[k] || {};
-      cats[k] = Object.keys(m).map(function (n) { return { n: Number(n), count: m[n] }; })
-        .sort(function (a, b) { return b.count - a.count || a.n - b.n; });
-    });
-    return { key: key, label: c.label, voters: c.voters, cats: cats };
+  return Object.keys(byClass).map(Number).sort(function (a, b) { return a - b; }).map(function (c) {
+    var x = byClass[c];
+    var top = Object.keys(x.m).map(function (n) { return { n: Number(n), count: x.m[n] }; })
+      .sort(function (a, b) { return b.count - a.count || a.n - b.n; });
+    return { key: String(c), label: c + '반', voters: x.voters, top: top };
   });
 }
 
@@ -891,45 +890,101 @@ function csvCell_(v) {
   return '"' + t.replace(/"/g, '""') + '"';
 }
 
-// 순수: 글 내려받기 CSV. (학번, 구간) 마다 가장 나중 글 하나. classKey 가 비면 전체. 열 이름에 '학번'이 있어 ingest.py --form1 에도 쓸 수 있음
+// 순수: 글 내려받기 CSV. 학생 한 명이 한 줄이고 1차시·2~3차시·4차시 글(각각 가장 나중 것)이 옆으로 나란히.
+// classKey(학년+반 3자리)가 비면 전체. 등록한 학생은 글이 없어도 줄이 있음(빈칸 = 안 냄). 열 이름에 '학번'이 있어 ingest.py --form1 에도 쓸 수 있음
 function adminNotesCsv(accounts, notes, classKey) {
-  var nameOf = {};
-  (accounts || []).forEach(function (a) { nameOf[String(a.id).trim()] = String(a.name); });
+  var nameOf = {}, ids = {};
+  (accounts || []).forEach(function (a) {
+    var id = String(a.id).trim();
+    if (!validateStudentId(id) || (classKey && id.slice(0, 3) !== classKey)) return;
+    nameOf[id] = String(a.name); ids[id] = true;
+  });
   var latest = {};
   (notes || []).forEach(function (n) {
     var id = String(n.id).trim();
     if (!validateStudentId(id) || NOTE_SECTIONS.indexOf(n.section) < 0) return;
     if (classKey && id.slice(0, 3) !== classKey) return;
+    ids[id] = true;
     var k = id + '|' + n.section;
     var t = toMs_(n.at);
     if (!latest[k] || (isFinite(t) && t >= toMs_(latest[k].at))) latest[k] = n;
   });
-  var keys = Object.keys(latest).sort();
-  var lines = [['학번', '이름', '구간', '제출시각', '글'].map(csvCell_).join(',')];
-  keys.forEach(function (k) {
-    var n = latest[k];
-    var id = String(n.id).trim();
-    lines.push([id, nameOf[id] || '', n.section, toIsoOrEmpty_(n.at), n.text].map(csvCell_).join(','));
+  var list = Object.keys(ids).sort();
+  var head = ['학번', '이름'];
+  NOTE_SECTIONS.forEach(function (sec) { head.push(NOTE_LABELS[sec], NOTE_LABELS[sec] + ' 제출시각'); });
+  var lines = [head.map(csvCell_).join(',')];
+  list.forEach(function (id) {
+    var row = [id, nameOf[id] || ''];
+    NOTE_SECTIONS.forEach(function (sec) {
+      var n = latest[id + '|' + sec];
+      row.push(n ? n.text : '', n ? toIsoOrEmpty_(n.at) : '');
+    });
+    lines.push(row.map(csvCell_).join(','));
   });
-  return { csv: '\uFEFF' + lines.join('\r\n') + '\r\n', count: keys.length };
+  return { csv: '\uFEFF' + lines.join('\r\n') + '\r\n', count: list.length };
 }
 
-// 순수: 투표 내려받기 CSV (투표자마다 가장 나중 한 번). tools/tally.py 가 자기 작품 표를 빼고 세는 데 씀
+var NOTE_LABELS = { t1: '1차시 기획서', t2: '2~3차시 제작 기록', t3: '4차시 소감' };
+
+// 순수: 관리자 "글 보기". 한 학생의 구간별 가장 나중 글과 제출 횟수. 없는 구간도 빈 칸으로 돌려줌
+function adminStudentNotes(notes, sid) {
+  var by = {};
+  (notes || []).forEach(function (n) {
+    if (String(n.id).trim() !== sid || NOTE_SECTIONS.indexOf(n.section) < 0) return;
+    var cur = by[n.section] || (by[n.section] = { last: null, times: 0 });
+    cur.times++;
+    var t = toMs_(n.at);
+    if (!cur.last || (isFinite(t) && t >= toMs_(cur.last.at))) cur.last = n;
+  });
+  return NOTE_SECTIONS.map(function (sec) {
+    var c = by[sec];
+    return { section: sec, label: NOTE_LABELS[sec], times: c ? c.times : 0,
+      at: c ? toIsoOrEmpty_(c.last.at) : '', text: c ? String(c.last.text) : '' };
+  });
+}
+
+// 순수: 투표 내려받기 CSV (투표자마다 가장 나중 한 번)
 function adminVotesCsv(votes) {
-  var latest = {};
-  (votes || []).forEach(function (v) {
-    var id = String(v.id).trim();
-    var t = toMs_(v.at);
-    if (!validateStudentId(id) || !v.votes) return;
-    if (!latest[id] || (isFinite(t) && t >= toMs_(latest[id].at))) latest[id] = v;
-  });
+  var latest = latestVotes_(votes);
   var ids = Object.keys(latest).sort();
-  var lines = [['학번', '반', '정확', '재미', '창의', '실용'].map(csvCell_).join(',')];
-  ids.forEach(function (id) {
-    var v = latest[id].votes;
-    lines.push([id, id.slice(0, 3), v.sci, v.fun, v.creative, v.practical].map(csvCell_).join(','));
-  });
+  var lines = [['학번', '반', '번호'].map(csvCell_).join(',')];
+  ids.forEach(function (id) { lines.push([id, classNo_(id), latest[id].pick].map(csvCell_).join(',')); });
   return { csv: '\uFEFF' + lines.join('\r\n') + '\r\n', count: ids.length };
+}
+
+// 순수: 관리자가 붙여넣은 작품 번호 명단 읽기. private/mapping.csv 그대로(머리글로 학번·반·번호·공개 열을 찾음)
+// 또는 머리글 없이 "학번,반,번호". 공개 열이 있으면 Y 인 줄만. → { rows:[{id,cls,n}], skipped }
+var GALLERY_TEXT_MAX = 200000;
+function parseGalleryText(text) {
+  if (typeof text !== 'string' || !text.trim() || text.length > GALLERY_TEXT_MAX) return null;
+  var lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(function (l) { return l.trim(); });
+  var split = function (l) {
+    return l.split(l.indexOf('\t') >= 0 ? '\t' : ',').map(function (c) { return c.trim().replace(/^"|"$/g, '').replace(/""/g, '"').trim(); });
+  };
+  var head = split(lines[0]);
+  var col = { id: 0, cls: 1, n: 2, pub: -1 };
+  if (head.indexOf('학번') >= 0) {
+    col = { id: head.indexOf('학번'), cls: head.indexOf('반'), n: head.indexOf('번호'), pub: head.indexOf('공개') };
+    if (col.cls < 0 || col.n < 0) return null;
+    lines = lines.slice(1);
+  }
+  var rows = [], seen = {}, taken = {}, skipped = 0;
+  lines.forEach(function (l) {
+    var c = split(l);
+    var id = String(c[col.id] || '').trim(), cls = Number(c[col.cls]), n = Number(c[col.n]);
+    var pubOk = col.pub < 0 || String(c[col.pub] || '').trim().toUpperCase() === 'Y';
+    if (!validateStudentId(id) || !pubOk || cls !== Math.floor(cls) || cls < 1 || cls > 16 || n !== Math.floor(n) || n < 1 || n > 99 ||
+        classNo_(id) !== cls || seen[id] || taken[cls + '|' + n]) { skipped++; return; }
+    seen[id] = true; taken[cls + '|' + n] = true;
+    rows.push({ id: id, cls: cls, n: n });
+  });
+  return { rows: rows, skipped: skipped };
+}
+
+function galleryInfo_(gallery) {
+  var by = {};
+  (gallery || []).forEach(function (g) { by[g.cls] = (by[g.cls] || 0) + 1; });
+  return { count: (gallery || []).length, classes: Object.keys(by).map(Number).sort(function (a, b) { return a - b; }).map(function (c) { return c + '반 ' + by[c] + '개'; }) };
 }
 
 // 순수: 학번마다 가장 높은 버전 하나만. classKey 가 비면 전체, 아니면 학번 앞 3자리(학년+반)가 같은 것만
@@ -960,7 +1015,8 @@ function adminPasswordCheck(deps, pw) {
 }
 
 // 순수: 관리자 목록 행 만들기. query 는 학번 일부 또는 이름 일부(공백 무시)
-function adminRows(accounts, submissions, query, lockedIds) {
+// 행마다 제출 여부: t1·t2·t3(글 마지막 시각), count·lastAt(게임), voteAt·pick(투표)
+function adminRows(accounts, submissions, query, lockedIds, notesMeta, votes) {
   var q = String(query === null || query === undefined ? '' : query).replace(/\s+/g, '').toLowerCase();
   var locked = {};
   (lockedIds || []).forEach(function (id) { locked[String(id)] = true; });
@@ -972,13 +1028,28 @@ function adminRows(accounts, submissions, query, lockedIds) {
     cur.count++;
     if (isFinite(t) && (!isFinite(cur.last) || t > cur.last)) cur.last = t;
   });
+  var note = {};
+  (notesMeta || []).forEach(function (n) {
+    var id = String(n.id).trim();
+    if (NOTE_SECTIONS.indexOf(n.section) < 0) return;
+    var t = toMs_(n.at);
+    var cur = note[id] || (note[id] = {});
+    if (isFinite(t) && (!cur[n.section] || t > cur[n.section])) cur[n.section] = t;
+  });
+  var lv = latestVotes_(votes);
+  var iso = function (t) { return t && isFinite(t) ? new Date(t).toISOString() : ''; };
   var rows = (accounts || []).filter(function (a) {
     if (!q) return true;
     return String(a.id).indexOf(q) >= 0 || normName_(a.name).toLowerCase().indexOf(q) >= 0;
   }).map(function (a) {
-    var s = stat[String(a.id)] || { count: 0, last: NaN };
-    return { id: String(a.id), name: String(a.name), registeredAt: toIsoOrEmpty_(a.at), reset: !!a.reset,
-      locked: !!locked[String(a.id)], count: s.count, lastAt: isFinite(s.last) ? new Date(s.last).toISOString() : '' };
+    var id = String(a.id);
+    var s = stat[id] || { count: 0, last: NaN };
+    var nt = note[id] || {};
+    var v = lv[id];
+    return { id: id, name: String(a.name), registeredAt: toIsoOrEmpty_(a.at), reset: !!a.reset,
+      locked: !!locked[id], count: s.count, lastAt: iso(s.last),
+      t1: iso(nt.t1), t2: iso(nt.t2), t3: iso(nt.t3),
+      voteAt: v ? toIsoOrEmpty_(v.at) : '', pick: v ? Number(v.pick) : null };
   });
   rows.sort(function (x, y) { return x.id < y.id ? -1 : x.id > y.id ? 1 : 0; });
   return { total: (accounts || []).length, shown: Math.min(rows.length, ADMIN_LIST_MAX), rows: rows.slice(0, ADMIN_LIST_MAX) };
@@ -994,7 +1065,7 @@ function adminHandle(deps, action, arg) {
   if (action === 'list') {
     var accounts = deps.readAccounts() || [];
     var locked = deps.lockedIds(accounts.map(function (a) { return a.id; })) || [];
-    return ok_(adminRows(accounts, deps.readSubmissions(), arg, locked));
+    return ok_(adminRows(accounts, deps.readSubmissions(), arg, locked, deps.readNotesMeta(), deps.readVotes()));
   }
   if (action === 'classes') {
     var latestAll = adminLatest(deps.readSubmissions(), '');
@@ -1011,6 +1082,36 @@ function adminHandle(deps, action, arg) {
     var nc = adminNotesCsv(deps.readAccounts() || [], deps.readNotes() || [], nk);
     if (!nc.count) return fail_('NOT_FOUND');
     return ok_({ name: 'notes_' + (nk || 'all') + '.csv', count: nc.count, csv: nc.csv });
+  }
+  if (action === 'note_view') {
+    var vid = String(arg === null || arg === undefined ? '' : arg).trim();
+    if (!validateStudentId(vid)) return fail_('BAD_REQUEST');
+    var vacc = findAccount_(deps.readAccounts() || [], vid);
+    var gs = (deps.readSubmissions() || []).filter(function (x) { return String(x.id).trim() === vid; });
+    var glast = NaN, gver = 0;
+    gs.forEach(function (x) { var t = toMs_(x.at); if (isFinite(t) && (!isFinite(glast) || t > glast)) glast = t; if (Number(x.version) > gver) gver = Number(x.version); });
+    var mv = latestVotes_(deps.readVotes())[vid];
+    return ok_({ studentId: vid, name: vacc ? String(vacc.name) : '', sections: adminStudentNotes(deps.readNotes() || [], vid),
+      game: { count: gs.length, lastAt: isFinite(glast) ? new Date(glast).toISOString() : '', version: gver || null },
+      vote: mv ? { pick: Number(mv.pick), at: toIsoOrEmpty_(mv.at) } : null,
+      myNumber: galleryFor_(deps.readGallery(), vid).mine });
+  }
+  if (action === 'gallery_info') {
+    var gi = galleryInfo_(deps.readGallery());
+    return ok_({ count: gi.count, classes: gi.classes });
+  }
+  if (action === 'gallery_set') {
+    var parsed = parseGalleryText(arg);
+    if (!parsed) return fail_('BAD_REQUEST', '명단을 읽지 못했어요. mapping.csv 내용을 그대로 붙여넣었는지 확인해 주세요.');
+    if (!parsed.rows.length) return fail_('BAD_REQUEST', '올릴 줄이 없어요. 공개(Y)한 작품이 있는지, 학번·반·번호 열이 있는지 확인해 주세요.');
+    if (!deps.tryLock()) return fail_('BUSY');
+    try {
+      deps.writeGallery(parsed.rows);
+    } finally {
+      deps.releaseLock();
+    }
+    var g2 = galleryInfo_(parsed.rows);
+    return ok_({ count: g2.count, classes: g2.classes, skipped: parsed.skipped });
   }
   if (action === 'votes') {
     var vc = adminVotesCsv(deps.readVotes() || []);
@@ -1101,6 +1202,21 @@ function adminNotes(classKey, pw) {
   return adminHandle(makeRealDeps(), 'notes', classKey);
 }
 
+function adminNoteView(studentId, pw) {
+  adminCheck_(pw);
+  return adminHandle(makeRealDeps(), 'note_view', studentId);
+}
+
+function adminGalleryInfo(pw) {
+  adminCheck_(pw);
+  return adminHandle(makeRealDeps(), 'gallery_info', '');
+}
+
+function adminSetGallery(text, pw) {
+  adminCheck_(pw);
+  return adminHandle(makeRealDeps(), 'gallery_set', typeof text === 'string' ? text : '');
+}
+
 function adminVotes(pw) {
   adminCheck_(pw);
   return adminHandle(makeRealDeps(), 'votes', '');
@@ -1125,47 +1241,81 @@ var ADMIN_HTML = [
 ':root{--bg:#f6f7fb;--card:#fff;--tx:#1f2430;--mut:#6b7280;--pri:#4f46e5;--pri2:#eef2ff;--bd:#d9dce6;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}',
 '@media (prefers-color-scheme:dark){:root{--bg:#14161c;--card:#1e222b;--tx:#e8eaf0;--mut:#9aa3b2;--pri:#818cf8;--pri2:#262a45;--bd:#343a48}}',
 '*{box-sizing:border-box}body{margin:0;font-family:"Noto Sans KR","Malgun Gothic",system-ui,sans-serif;background:var(--bg);color:var(--tx);line-height:1.5;word-break:keep-all}',
-'main{max-width:1000px;margin:0 auto;padding:20px 16px 48px}h1{font-size:20px;margin:0 0 4px}.sub{color:var(--mut);font-size:14px;margin:0 0 16px}',
+'main{max-width:1100px;margin:0 auto;padding:20px 16px 48px}h1{font-size:20px;margin:0 0 4px}.sub{color:var(--mut);font-size:14px;margin:0 0 16px}',
+'h2.sec{font-size:17px;margin:28px 0 10px}',
 '.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin-bottom:12px}',
+'.bar label{color:var(--mut);font-size:14px}',
 '.bar input{flex:1;min-width:180px;padding:9px 10px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit;font-size:15px}',
+'.bar textarea{flex:1 1 100%;min-height:70px;padding:9px 10px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:12px Consolas,monospace}',
 'button{border:1px solid var(--bd);background:var(--card);color:var(--tx);padding:8px 14px;border-radius:7px;cursor:pointer;font:inherit;font-size:14px;min-height:36px}',
-'button.p{background:var(--pri);color:#fff;border-color:var(--pri)}button:disabled{opacity:.5;cursor:default}button:focus-visible,input:focus-visible{outline:2px solid var(--pri);outline-offset:2px}',
+'button.p{background:var(--pri);color:#fff;border-color:var(--pri)}button:disabled{opacity:.5;cursor:default}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--pri);outline-offset:2px}',
+'select{padding:8px 10px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit;font-size:15px;min-height:36px}',
 '#msg{min-height:22px;font-size:14px;margin:4px 2px 10px}#msg.ok{color:var(--ok)}#msg.bad{color:var(--bad)}',
 '.wrap{background:var(--card);border:1px solid var(--bd);border-radius:10px;overflow-x:auto}',
 'table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:9px 10px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}th{color:var(--mut);font-weight:600;background:var(--pri2)}',
-'td.n{text-align:right}.tag{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--bd)}.tag.r{color:var(--warn);border-color:var(--warn)}.tag.l{color:var(--bad);border-color:var(--bad)}',
+'td.n{text-align:right}.ck{color:var(--ok);font-weight:700}.no{color:var(--mut)}td small{color:var(--mut);font-size:12px;margin-left:5px}',
+'.tag{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--bd)}.tag.r{color:var(--warn);border-color:var(--warn)}.tag.l{color:var(--bad);border-color:var(--bad)}',
 '.empty{padding:24px;text-align:center;color:var(--mut)}[hidden]{display:none!important}',
-'select{padding:8px 10px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit;font-size:15px;min-height:36px}',
+'td .acts{display:flex;gap:6px;justify-content:flex-end}',
+'.ov{position:fixed;inset:0;background:rgba(15,20,30,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}.ov.on{display:flex}',
+'.pm{background:var(--card);color:var(--tx);width:min(820px,100%);max-height:92vh;overflow:auto;border-radius:12px;padding:20px 22px;box-shadow:0 10px 30px rgba(0,0,0,.25)}',
+'.pm h2{margin:0 0 2px;font-size:19px}.pm .hd{display:flex;align-items:flex-start;gap:12px;margin-bottom:10px}.pm .hd div{flex:1}',
+'.kv{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;font-size:14px;margin:8px 0 4px;padding:12px;border:1px solid var(--bd);border-radius:10px}.kv dt{color:var(--mut)}.kv dd{margin:0}',
+'.nt{border:1px solid var(--bd);border-radius:10px;margin:12px 0;overflow:hidden}.nt h3{margin:0;padding:9px 12px;background:var(--pri2);font-size:15px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}',
+'.nt h3 span{font-size:13px;font-weight:400;color:var(--mut)}.nt pre{margin:0;padding:12px;white-space:pre-wrap;word-break:break-word;font:inherit;font-size:14px;line-height:1.6;max-height:46vh;overflow:auto}.nt .none{padding:12px;color:var(--mut);font-size:14px}',
 '</style></head><body><main>',
-'<h1>제출 시험 관리자</h1>',
-'<p class="sub">학번이나 이름으로 찾고, 비밀번호를 잊었거나 잠긴 학생을 초기화합니다. 초기화하면 그 학생의 비밀번호는 <b>학번</b>이 되고 잠금도 풀립니다.</p>',
-'<div class="bar" id="pwbar" hidden><label for="pw" class="sub" style="margin:0">관리자 비밀번호</label><input id="pw" type="password" autocomplete="off"><button class="p" id="pwgo">들어가기</button></div>',
+'<h1>수업 관리자</h1>',
+'<p class="sub">학생마다 제출했는지 먼저 보이고, [자세히]를 누르면 내용이 나옵니다. 비밀번호를 잊었거나 잠긴 학생은 [초기화]하면 잠금이 풀리고, 학생이 <b>학번</b>으로 로그인한 뒤 새 비밀번호를 정합니다.</p>',
+'<div class="bar" id="pwbar" hidden><label for="pw">관리자 비밀번호</label><input id="pw" type="password" autocomplete="off"><button class="p" id="pwgo">들어가기</button></div>',
 '<div id="pwmsg" role="status" aria-live="polite" class="sub"></div>',
 '<div id="app" hidden>',
-'<div class="bar"><label for="cls" class="sub" style="margin:0">갤러리용 내려받기</label><select id="cls" aria-label="반 선택"></select><button class="p" id="dl">이 반 내려받기</button><button id="dlall">모든 반 차례로 내려받기</button></div>',
-'<p class="sub" style="margin-top:-4px">학생마다 <b>가장 최근에 낸 작품</b>만 담긴 zip 파일이 내려받아집니다. 이 zip을 풀지 말고 <code>python tools/ingest.py 내려받은.zip</code>에 넣으면 됩니다.</p>',
-'<div class="bar"><label for="ncls" class="sub" style="margin:0">글·투표</label><select id="ncls" aria-label="글 내려받기 범위"></select><button class="p" id="nbtn">글 내려받기 (CSV)</button><button id="tbtn">투표 집계 보기</button><button id="vbtn">투표 내려받기 (CSV)</button></div>',
-'<p class="sub" style="margin-top:-4px">글은 1·2·4차시에 학생이 낸 요약입니다(학번·구간마다 가장 나중 것). 투표 내려받기 파일은 <code>python tools/tally.py</code>에 넣으면 자기 작품에 준 표를 빼고 세어 줍니다.</p>',
-'<div id="tally"></div>',
-'<div class="bar"><label for="q" class="sub" style="margin:0">찾기</label><input id="q" type="search" placeholder="학번 또는 이름 (비우면 전체)" autocomplete="off"><button class="p" id="go">조회</button></div>',
+'<div class="bar"><label for="q">찾기</label><input id="q" type="search" placeholder="학번이나 이름 일부 (비우면 전체)" autocomplete="off"><button class="p" id="go">조회</button></div>',
 '<div id="msg" role="status" aria-live="polite"></div>',
-'<div class="wrap"><table><thead><tr><th>학번</th><th>이름</th><th>등록</th><th>제출</th><th>최근 제출</th><th>상태</th><th></th></tr></thead><tbody id="tb"><tr><td colspan="7" class="empty">불러오는 중…</td></tr></tbody></table></div>',
+'<div class="wrap"><table><thead><tr><th>학번</th><th>이름</th><th>1차시 기획서</th><th>게임</th><th>2~3차시 기록</th><th>투표</th><th>4차시 소감</th><th>상태</th><th></th></tr></thead><tbody id="tb"><tr><td colspan="9" class="empty">불러오는 중…</td></tr></tbody></table></div>',
+'<p class="sub" style="margin-top:6px">✓ 옆은 마지막으로 낸 시각입니다. 게임은 낸 횟수, 투표는 고른 작품 번호가 함께 보입니다.</p>',
+'',
+'<h2 class="sec">내려받기와 투표</h2>',
+'<div class="bar"><label for="cls">갤러리용 작품</label><select id="cls" aria-label="반 선택"></select><button class="p" id="dl">이 반 내려받기</button><button id="dlall">모든 반 차례로 내려받기</button></div>',
+'<p class="sub" style="margin-top:-4px">학생마다 가장 최근에 낸 작품만 담긴 zip입니다. 풀지 말고 <code>python tools/ingest.py 내려받은.zip</code>에 넣습니다.</p>',
+'<div class="bar"><label for="ncls">글·투표</label><select id="ncls" aria-label="글 내려받기 범위"></select><button class="p" id="nbtn">글 내려받기 (CSV)</button><button id="tbtn">투표 집계 보기</button><button id="vbtn">투표 내려받기 (CSV)</button></div>',
+'<p class="sub" style="margin-top:-4px">글 CSV는 학생 한 명이 한 줄이고, 1차시·2~3차시·4차시 글이 옆으로 나란히 들어갑니다(각각 가장 나중 것).</p>',
+'<div id="tally"></div>',
+'<div class="bar"><label for="gtxt">작품 번호 명단</label><span id="ginfo" class="sub" style="margin:0"></span><textarea id="gtxt" spellcheck="false" placeholder="갤러리를 공개한 뒤 private/mapping.csv 내용을 그대로 붙여넣으세요 (학번, 반, 번호 열이 있으면 됩니다)"></textarea><button class="p" id="gbtn">명단 올리기</button></div>',
+'<p class="sub" style="margin-top:-4px">이 명단이 있어야 학생이 투표할 수 있습니다. 서버는 학번·반·번호만 저장하고, 학생이 <b>자기 작품 번호</b>나 <b>우리 반에 없는 번호</b>를 고르면 막습니다. 공개(Y)가 아닌 줄은 빠집니다.</p>',
 '</div>',
-'</main><script>',
+'</main>',
+'<div class="ov" id="nov" role="dialog" aria-modal="true" aria-labelledby="nvt"><div class="pm"><div class="hd"><div><h2 id="nvt">학생 제출 내용</h2><p class="sub" id="nvs" style="margin:0"></p></div><button id="nvx">닫기</button></div><div id="nvb"></div></div></div>',
+'<script>',
 'var $=function(id){return document.getElementById(id)};var PW="";var CLS=[];',
-'function fmt(iso){if(!iso)return "-";var d=new Date(iso);if(isNaN(d))return "-";var p=function(n){return (n<10?"0":"")+n};return (d.getMonth()+1)+"/"+d.getDate()+" "+p(d.getHours())+":"+p(d.getMinutes())}',
+'function fmt(iso){if(!iso)return "";var d=new Date(iso);if(isNaN(d))return "";var p=function(n){return (n<10?"0":"")+n};return (d.getMonth()+1)+"/"+d.getDate()+" "+p(d.getHours())+":"+p(d.getMinutes())}',
 'function msg(t,cls){var m=$("msg");m.textContent=t;m.className=cls||""}',
 'function td(text,cls){var c=document.createElement("td");c.textContent=text;if(cls)c.className=cls;return c}',
+'function mark(iso,extra){var c=document.createElement("td");if(iso){var s=document.createElement("span");s.className="ck";s.textContent="✓";c.appendChild(s);var m=document.createElement("small");m.textContent=(extra?extra+" · ":"")+fmt(iso);c.appendChild(m)}else{var n=document.createElement("span");n.className="no";n.textContent="—";c.appendChild(n)}return c}',
 'function render(res){var tb=$("tb");tb.textContent="";if(!res||!res.ok){msg("목록을 불러오지 못했어요.","bad");return}',
-' if(!res.rows.length){var tr=document.createElement("tr");var c=td("등록한 학생이 없거나 찾는 학생이 없어요.","empty");c.colSpan=7;tr.appendChild(c);tb.appendChild(tr)}',
-' res.rows.forEach(function(r){var tr=document.createElement("tr");tr.appendChild(td(r.id));tr.appendChild(td(r.name));tr.appendChild(td(fmt(r.registeredAt)));tr.appendChild(td(String(r.count),"n"));tr.appendChild(td(fmt(r.lastAt)));',
+' if(!res.rows.length){var tr=document.createElement("tr");var c=td("등록한 학생이 없거나 찾는 학생이 없어요.","empty");c.colSpan=9;tr.appendChild(c);tb.appendChild(tr)}',
+' var k={t1:0,game:0,t2:0,vote:0,t3:0};',
+' res.rows.forEach(function(r){if(r.t1)k.t1++;if(r.count)k.game++;if(r.t2)k.t2++;if(r.voteAt)k.vote++;if(r.t3)k.t3++;',
+'  var tr=document.createElement("tr");tr.appendChild(td(r.id));tr.appendChild(td(r.name));tr.appendChild(mark(r.t1));tr.appendChild(mark(r.count?r.lastAt:"",r.count?r.count+"번":""));tr.appendChild(mark(r.t2));tr.appendChild(mark(r.voteAt,r.pick?r.pick+"번":""));tr.appendChild(mark(r.t3));',
 '  var st=document.createElement("td");var tags=[];if(r.reset)tags.push(["초기화됨(비밀번호=학번)","r"]);if(r.locked)tags.push(["잠김","l"]);if(!tags.length)tags.push(["정상",""]);tags.forEach(function(t){var s=document.createElement("span");s.className="tag "+t[1];s.textContent=t[0];st.appendChild(s);st.appendChild(document.createTextNode(" "))});tr.appendChild(st);',
-'  var bc=document.createElement("td");var b=document.createElement("button");b.textContent="초기화";b.setAttribute("aria-label",r.id+" "+r.name+" 초기화");b.onclick=function(){reset(r,b)};bc.appendChild(b);tr.appendChild(bc);tb.appendChild(tr)});',
-' var info=res.shown<res.total&&!$("q").value.trim()?" (앞에서 "+res.shown+"명만 표시)":"";msg("등록 "+res.total+"명 중 "+res.rows.length+"명"+info,"")}',
+'  var bc=document.createElement("td");var ac=document.createElement("div");ac.className="acts";var v=document.createElement("button");v.textContent="자세히";v.setAttribute("aria-label",r.id+" "+r.name+" 자세히");v.onclick=function(){viewDetail(r,v)};ac.appendChild(v);var b=document.createElement("button");b.textContent="초기화";b.setAttribute("aria-label",r.id+" "+r.name+" 초기화");b.onclick=function(){reset(r,b)};ac.appendChild(b);bc.appendChild(ac);tr.appendChild(bc);tb.appendChild(tr)});',
+' var info=res.shown<res.total&&!$("q").value.trim()?" (앞에서 "+res.shown+"명만 표시)":"";',
+' msg("등록 "+res.total+"명 중 "+res.rows.length+"명"+info+" · 1차시 "+k.t1+" · 게임 "+k.game+" · 2~3차시 "+k.t2+" · 투표 "+k.vote+" · 4차시 "+k.t3,"")}',
 'function load(){msg("불러오는 중…","");$("go").disabled=true;google.script.run.withSuccessHandler(function(r){$("go").disabled=false;render(r)}).withFailureHandler(function(e){$("go").disabled=false;msg("불러오지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminList($("q").value,PW)}',
-'function reset(r,b){if(!confirm(r.id+" "+r.name+" 학생의 비밀번호를 학번("+r.id+")으로 초기화할까요?\\n잠금도 풀리고, 지금 로그인된 화면은 끊깁니다."))return;b.disabled=true;msg(r.id+" 초기화하는 중…","");',
-' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){msg(r.id+" "+r.name+": 초기화했어요. 학생은 학번으로 로그인하면 됩니다.","ok");setTimeout(load,600)}else{b.disabled=false;msg("초기화하지 못했어요: "+(res&&res.message||"오류"),"bad")}})',
+'function reset(r,b){if(!confirm(r.id+" "+r.name+" 학생의 비밀번호를 학번("+r.id+")으로 초기화할까요?\\n잠금도 풀리고, 학생은 학번으로 로그인한 뒤 새 비밀번호를 정합니다."))return;b.disabled=true;msg(r.id+" 초기화하는 중…","");',
+' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){msg(r.id+" "+r.name+": 초기화했어요. 학생은 학번으로 로그인한 뒤 새 비밀번호를 정하면 됩니다.","ok");setTimeout(load,600)}else{b.disabled=false;msg("초기화하지 못했어요: "+(res&&res.message||"오류"),"bad")}})',
 ' .withFailureHandler(function(e){b.disabled=false;msg("초기화하지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminReset(r.id,PW)}',
+'var lastFocus=null;function closeDetail(){$("nov").classList.remove("on");if(lastFocus)lastFocus.focus()}',
+'function kv(dl,k,v){var t=document.createElement("dt");t.textContent=k;var d=document.createElement("dd");d.textContent=v;dl.appendChild(t);dl.appendChild(d)}',
+'function showDetail(res){var box=$("nvb");box.textContent="";$("nvt").textContent=res.studentId+" "+(res.name||"");$("nvs").textContent="글은 구간마다 가장 나중에 낸 것이에요.";',
+' var dl=document.createElement("dl");dl.className="kv";var g=res.game||{};',
+' kv(dl,"게임",g.count?("제출 "+g.count+"번 · 마지막 "+fmt(g.lastAt)+(g.version?" (v"+g.version+")":"")):"아직 내지 않음");',
+' kv(dl,"투표",res.vote?(res.vote.pick+"번 작품 · "+fmt(res.vote.at)):"아직 하지 않음");',
+' kv(dl,"내 작품 번호",res.myNumber?(res.myNumber+"번 (이 번호에는 투표 못 함)"):"명단에 없음");box.appendChild(dl);',
+' res.sections.forEach(function(s){var d=document.createElement("section");d.className="nt";var h=document.createElement("h3");h.textContent=s.label;var m=document.createElement("span");m.textContent=s.times?("제출 "+s.times+"번 · 마지막 "+fmt(s.at)):"아직 내지 않음";h.appendChild(m);d.appendChild(h);',
+'  if(s.text){var pre=document.createElement("pre");pre.textContent=s.text;d.appendChild(pre)}else{var n=document.createElement("div");n.className="none";n.textContent="제출한 글이 없어요.";d.appendChild(n)}box.appendChild(d)});',
+' $("nov").classList.add("on");$("nvx").focus()}',
+'function viewDetail(r,b){b.disabled=true;msg(r.id+" "+r.name+" 내용을 불러오는 중…","");lastFocus=b;google.script.run.withSuccessHandler(function(res){b.disabled=false;if(res&&res.ok){msg("","");showDetail(res)}else msg("불러오지 못했어요: "+(res&&res.message||"오류"),"bad")}).withFailureHandler(function(e){b.disabled=false;msg("불러오지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminNoteView(r.id,PW)}',
+'$("nvx").onclick=closeDetail;$("nov").addEventListener("click",function(e){if(e.target===$("nov"))closeDetail()});document.addEventListener("keydown",function(e){if(e.key==="Escape"&&$("nov").classList.contains("on"))closeDetail()});',
 'function saveZip(name,b64){var bin=atob(b64),n=bin.length,u=new Uint8Array(n);for(var i=0;i<n;i++)u[i]=bin.charCodeAt(i);var url=URL.createObjectURL(new Blob([u],{type:"application/zip"}));var a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(function(){URL.revokeObjectURL(url)},60000)}',
 'function loadClasses(){google.script.run.withSuccessHandler(function(r){var sel=$("cls");sel.textContent="";CLS=(r&&r.ok&&r.classes)||[];CLS.forEach(function(c){var o=document.createElement("option");o.value=c.key;o.textContent=c.label+" ("+c.count+"명)";sel.appendChild(o)});if(!CLS.length){var o=document.createElement("option");o.textContent="제출한 반이 없어요";sel.appendChild(o)}$("dl").disabled=$("dlall").disabled=!CLS.length;var ns=$("ncls");ns.textContent="";var a0=document.createElement("option");a0.value="";a0.textContent="모든 반";ns.appendChild(a0);CLS.forEach(function(c){var o=document.createElement("option");o.value=c.key;o.textContent=c.label;ns.appendChild(o)})}).withFailureHandler(function(){}).adminClasses(PW)}',
 'function dlOne(c,next){msg(c.label+" 만드는 중…","");google.script.run.withSuccessHandler(function(r){if(r&&r.ok){saveZip(r.name,r.b64);msg(c.label+": "+r.count+"명 작품을 내려받았어요 ("+r.name+")","ok");if(next)setTimeout(next,1200);else $("dl").disabled=$("dlall").disabled=false}else{msg(c.label+" 실패: "+(r&&r.message||"오류"),"bad");$("dl").disabled=$("dlall").disabled=false}}).withFailureHandler(function(e){msg(c.label+" 실패: "+(e&&e.message||"오류"),"bad");$("dl").disabled=$("dlall").disabled=false}).adminZip(c.key,PW)}',
@@ -1173,19 +1323,23 @@ var ADMIN_HTML = [
 '$("dlall").onclick=function(){if(!CLS.length||!confirm(CLS.length+"개 반을 차례로 내려받습니다. 크롬이 여러 파일 내려받기를 물으면 허용해 주세요."))return;$("dl").disabled=$("dlall").disabled=true;var i=0;(function step(){var c=CLS[i++];if(!c){$("dl").disabled=$("dlall").disabled=false;msg("모든 반을 내려받았어요.","ok");return}dlOne(c,step)})()};',
 'function saveText(name,text){var url=URL.createObjectURL(new Blob([text],{type:"text/csv;charset=utf-8"}));var a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(function(){URL.revokeObjectURL(url)},60000)}',
 'function busyN(on){$("nbtn").disabled=$("tbtn").disabled=$("vbtn").disabled=on}',
-'function dlCsv(fn,arg,label){busyN(true);msg(label+" 만드는 중…","");var h=google.script.run.withSuccessHandler(function(r){busyN(false);if(r&&r.ok){saveText(r.name,r.csv);msg(label+": "+r.count+"건을 내려받았어요 ("+r.name+")","ok")}else msg(label+" 실패: "+(r&&r.message||"오류"),"bad")}).withFailureHandler(function(e){busyN(false);msg(label+" 실패: "+(e&&e.message||"오류"),"bad")});if(fn==="adminVotes")h.adminVotes(PW);else h.adminNotes(arg,PW)}',
+'function dlCsv(fn,arg,label){busyN(true);msg(label+" 만드는 중…","");var h=google.script.run.withSuccessHandler(function(r){busyN(false);if(r&&r.ok){saveText(r.name,r.csv);msg(label+": "+r.count+"줄을 내려받았어요 ("+r.name+")","ok")}else msg(label+" 실패: "+(r&&r.message||"오류"),"bad")}).withFailureHandler(function(e){busyN(false);msg(label+" 실패: "+(e&&e.message||"오류"),"bad")});if(fn==="adminVotes")h.adminVotes(PW);else h.adminNotes(arg,PW)}',
 '$("nbtn").onclick=function(){dlCsv("adminNotes",$("ncls").value,"글")};',
 '$("vbtn").onclick=function(){dlCsv("adminVotes","","투표")};',
-'var CATS=[["sci","정확"],["fun","재미"],["creative","창의"],["practical","실용"]];',
 'function renderTally(r){var box=$("tally");box.textContent="";if(!r||!r.ok){msg("투표 집계를 불러오지 못했어요.","bad");return}',
-' var p=document.createElement("p");p.className="sub";p.textContent="투표 "+(r.voteOpen?"받는 중":"닫힘")+" · 반마다 투표자 수와 부문별 1~3위 작품 번호(득표). 자기 작품에 준 표는 아직 빼지 않은 숫자예요.";box.appendChild(p);',
+' var p=document.createElement("p");p.className="sub";p.textContent="투표 "+(r.voteOpen?"받는 중":"닫힘")+" · 반마다 투표한 학생 수와 많이 받은 작품 번호(표 수). 자기 작품 투표는 서버에서 막혀 있어요.";box.appendChild(p);',
 ' if(!r.classes.length){var e=document.createElement("p");e.className="empty";e.textContent="아직 투표가 없어요.";box.appendChild(e);return}',
-' var w=document.createElement("div");w.className="wrap";var t=document.createElement("table");var hr=document.createElement("tr");["반","투표자"].concat(CATS.map(function(c){return c[1]})).forEach(function(h){var th=document.createElement("th");th.textContent=h;hr.appendChild(th)});t.appendChild(hr);',
-' r.classes.forEach(function(c){var tr=document.createElement("tr");tr.appendChild(td(c.label));tr.appendChild(td(String(c.voters),"n"));CATS.forEach(function(k){tr.appendChild(td((c.cats[k[0]]||[]).slice(0,3).map(function(x){return x.n+"번("+x.count+")"}).join(", ")||"-"))});t.appendChild(tr)});',
+' var w=document.createElement("div");w.className="wrap";w.style.marginBottom="12px";var t=document.createElement("table");var hr=document.createElement("tr");["반","투표한 학생","1위","2위","3위","4위","5위"].forEach(function(h){var th=document.createElement("th");th.textContent=h;hr.appendChild(th)});t.appendChild(hr);',
+' r.classes.forEach(function(c){var tr=document.createElement("tr");tr.appendChild(td(c.label));tr.appendChild(td(String(c.voters),"n"));for(var i=0;i<5;i++){var x=c.top[i];tr.appendChild(td(x?(x.n+"번 ("+x.count+"표)"):"-"))}t.appendChild(tr)});',
 ' w.appendChild(t);box.appendChild(w)}',
 '$("tbtn").onclick=function(){busyN(true);msg("투표 집계 중…","");google.script.run.withSuccessHandler(function(r){busyN(false);renderTally(r);msg("","")}).withFailureHandler(function(e){busyN(false);msg("투표 집계 실패: "+(e&&e.message||"오류"),"bad")}).adminTallyView(PW)};',
+'function showGalleryInfo(r){$("ginfo").textContent=r&&r.ok&&r.count?("지금 명단: "+r.count+"명 · "+r.classes.join(", ")):"아직 명단이 없어요. 명단이 없으면 학생이 투표할 수 없어요."}',
+'function loadGalleryInfo(){google.script.run.withSuccessHandler(showGalleryInfo).withFailureHandler(function(){}).adminGalleryInfo(PW)}',
+'$("gbtn").onclick=function(){var t=$("gtxt").value;if(!t.trim()){msg("명단 칸이 비어 있어요.","bad");return}if(!confirm("작품 번호 명단을 새로 올립니다. 지금 있는 명단은 바뀝니다. 계속할까요?"))return;$("gbtn").disabled=true;msg("명단 올리는 중…","");',
+' google.script.run.withSuccessHandler(function(r){$("gbtn").disabled=false;if(r&&r.ok){msg("명단 "+r.count+"명을 올렸어요"+(r.skipped?(" (빠진 줄 "+r.skipped+"개)"):"")+".","ok");$("gtxt").value="";showGalleryInfo(r)}else msg("명단을 올리지 못했어요: "+(r&&r.message||"오류"),"bad")})',
+' .withFailureHandler(function(e){$("gbtn").disabled=false;msg("명단을 올리지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminSetGallery(t,PW)};',
 '$("go").onclick=load;$("q").addEventListener("keydown",function(e){if(e.key==="Enter")load()});',
-'function enter(){$("pwbar").hidden=true;$("pwmsg").textContent="";$("app").hidden=false;load();loadClasses()}',
+'function enter(){$("pwbar").hidden=true;$("pwmsg").textContent="";$("app").hidden=false;load();loadClasses();loadGalleryInfo()}',
 'function tryPw(){PW=$("pw").value;$("pwmsg").textContent="확인하는 중…";google.script.run.withSuccessHandler(function(r){if(r&&r.ok)enter();else $("pwmsg").textContent="들어가지 못했어요."}).withFailureHandler(function(e){PW="";$("pwmsg").textContent=e&&e.message||"들어가지 못했어요."}).adminClasses(PW)}',
 '$("pwgo").onclick=tryPw;$("pw").addEventListener("keydown",function(e){if(e.key==="Enter")tryPw()});',
 'google.script.run.withSuccessHandler(function(i){if(i&&i.open)enter();else{$("pwbar").hidden=false;$("pw").focus()}}).withFailureHandler(function(){$("pwbar").hidden=false}).adminInfo();',
@@ -1257,7 +1411,7 @@ function makeRealDeps() {
       appendRow_('Notes', [n.at, n.id, n.section, textCell_(n.text)]);
     },
     appendVote: function (v) {
-      appendRow_('Votes', [v.at, v.id, v.cls, v.votes.sci, v.votes.fun, v.votes.creative, v.votes.practical]);
+      appendRow_('Votes', [v.at, v.id, v.cls, v.pick]);
     },
     // 글 내용(4열)은 읽지 않는 가벼운 읽기: 내 현황 확인용
     readNotesMeta: function () {
@@ -1274,9 +1428,22 @@ function makeRealDeps() {
     },
     readVotes: function () {
       return dataRows_('Votes').map(function (r) {
-        return { at: r[0], id: String(r[1]).trim(), cls: String(r[2]).trim(),
-          votes: { sci: Number(r[3]), fun: Number(r[4]), creative: Number(r[5]), practical: Number(r[6]) } };
+        return { at: r[0], id: String(r[1]).trim(), cls: Number(r[2]), pick: Number(r[3]) };
       }).filter(function (v) { return v.id; });
+    },
+    readGallery: function () {
+      return dataRows_('Gallery').map(function (r) {
+        return { id: String(r[0]).trim(), cls: Number(r[1]), n: Number(r[2]) };
+      }).filter(function (g) { return g.id; });
+    },
+    // 관리자: 작품 번호 명단을 통째로 바꿈 (머리글은 둠)
+    writeGallery: function (rows) {
+      var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Gallery') || ensureSheet_('Gallery');
+      if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 3).clearContent();
+      if (!rows.length) return;
+      if (sh.getMaxRows() < rows.length + 1) sh.insertRowsAfter(sh.getMaxRows(), rows.length + 1 - sh.getMaxRows());
+      sh.getRange(2, 1, rows.length, 1).setNumberFormat('@');
+      sh.getRange(2, 1, rows.length, 3).setValues(rows.map(function (g) { return [g.id, g.cls, g.n]; }));
     },
     voteOpen: function () {
       var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Config');

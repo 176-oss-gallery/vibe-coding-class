@@ -319,13 +319,9 @@ h3{scroll-margin-top:84px}
   <div class="galbox" id="galbox" hidden><iframe id="galframe" title="우리 반 갤러리" loading="lazy"></iframe></div>
 
   <h3 id="s3-1">투표하기</h3>
-  <p class="sub">칸마다 작품 <b>번호</b> 하나를 적어요. <b>내 작품은 고르지 않아요.</b> 다시 내면 마지막 투표가 쓰여요.</p>
-  <div class="g2">
-    <div class="fld"><label for="v_sci">과학적으로 가장 정확한 작품</label><input type="number" id="v_sci" min="1" max="99" inputmode="numeric" placeholder="번호"></div>
-    <div class="fld"><label for="v_fun">가장 재미있는 작품</label><input type="number" id="v_fun" min="1" max="99" inputmode="numeric" placeholder="번호"></div>
-    <div class="fld"><label for="v_creative">가장 창의적인 작품</label><input type="number" id="v_creative" min="1" max="99" inputmode="numeric" placeholder="번호"></div>
-    <div class="fld"><label for="v_practical">가장 실용적인 작품</label><input type="number" id="v_practical" min="1" max="99" inputmode="numeric" placeholder="번호"></div>
-  </div>
+  <p class="sub">우리 반 작품 중 <b>가장 마음에 드는 작품 하나</b>의 번호를 적어요. 내 작품은 고를 수 없어요. 다시 내면 마지막 투표가 쓰여요.</p>
+  <div class="fld" style="max-width:280px"><label for="v_pick">가장 마음에 드는 작품 번호</label><input type="number" id="v_pick" min="1" max="99" inputmode="numeric" placeholder="번호"></div>
+  <p class="sub" id="vmine" hidden></p>
   <div class="row dock in">
     <button class="btn p" id="vbtn" onclick="submitVote()">투표 제출</button>
     <p class="st" id="vstate" aria-live="polite"></p>
@@ -370,11 +366,11 @@ h3{scroll-margin-top:84px}
   <p class="sub" id="ahint" style="text-align:center"></p>
   <div class="fld"><label for="aid">학번 (5자리)</label><input type="text" id="aid" inputmode="numeric" maxlength="5" autocomplete="username"></div>
   <div class="fld" id="anamew"><label for="aname">이름 (정확히)</label><input type="text" id="aname" autocomplete="off"></div>
-  <div class="fld"><label for="apw">비밀번호</label><input type="password" id="apw" autocomplete="current-password"></div>
+  <div class="fld"><label for="apw" id="apwl">비밀번호</label><input type="password" id="apw" autocomplete="current-password"></div>
   <div class="fld" id="apw2w"><label for="apw2">비밀번호 한 번 더</label><input type="password" id="apw2" autocomplete="new-password"></div>
   <div id="aerr" role="alert" style="color:var(--bad);font-weight:700;min-height:24px;margin:6px 0"></div>
   <div class="row"><span style="flex:1"></span><button class="btn" type="button" id="acancel">닫기</button><button class="btn p" type="button" id="aok">로그인</button></div>
-  <p class="sub">비밀번호를 잊어버리거나 잠기면 선생님께 말하세요. 선생님이 초기화하면 <b>학번</b>이 비밀번호가 돼요.</p>
+  <p class="sub">비밀번호를 잊어버리거나 잠기면 선생님께 말하세요. 선생님이 초기화하면 <b>학번</b>으로 로그인한 뒤 새 비밀번호를 정해요.</p>
 </div></div>
 <div id="toast"></div>
 
@@ -434,27 +430,37 @@ async function sapi(action,payload){
   if(!r.ok&&r.code==='SESSION_EXPIRED'){A.session=null;refresh();openAuth('login','로그인 시간이 지났어요. 다시 로그인해 주세요.')}
   return r}
 let amode='login';
-function setAuthMode(m){amode=m;const reg=m==='register';
-  $('at').textContent=reg?'처음 등록':'로그인';$('anamew').hidden=!reg;$('apw2w').hidden=!reg;
-  $('aok').textContent=reg?'등록하고 로그인':'로그인';$('amlogin').className='btn'+(reg?'':' p');$('amreg').className='btn'+(reg?' p':'');
-  $('ahint').textContent=reg?'처음 한 번만 등록해요. 비밀번호는 4~20자, 나만 아는 것으로 정하세요. 쉬운 비밀번호(1234 등)나 학번·이름이 들어간 비밀번호는 안 돼요.':'등록했던 학번과 비밀번호를 입력하세요.';
-  $('apw').autocomplete=reg?'new-password':'current-password'}
+let PEND=null; // 초기화된 학생: 학번으로 로그인한 뒤 새 비밀번호를 정하는 중 {sid, pw}
+function setAuthMode(m){amode=m;const reg=m==='register',chg=m==='change';
+  $('at').textContent=chg?'새 비밀번호 정하기':reg?'처음 등록':'로그인';$('anamew').hidden=!reg;$('apw2w').hidden=!(reg||chg);
+  $('aok').textContent=chg?'새 비밀번호로 로그인':reg?'등록하고 로그인':'로그인';$('amlogin').className='btn'+(reg||chg?'':' p');$('amreg').className='btn'+(reg?' p':'');
+  $('amlogin').parentElement.hidden=chg;$('aid').readOnly=chg;
+  $('apwl').textContent=chg?'새 비밀번호':'비밀번호';
+  $('ahint').textContent=chg?'선생님이 비밀번호를 초기화했어요. 앞으로 쓸 새 비밀번호를 정하세요(학번은 안 돼요).':reg?'처음 한 번만 등록해요. 비밀번호는 내가 기억하기 쉬운 것으로 정하세요.':'등록했던 학번과 비밀번호를 입력하세요.';
+  $('apw').autocomplete=reg||chg?'new-password':'current-password';if(!chg)PEND=null}
 function openAuth(m,msg){setAuthMode(m||'login');$('aerr').textContent=msg||'';$('aid').value=A.sid||S.f.sid||'';$('apw').value='';$('apw2').value='';
   $('aov').classList.add('on');document.body.style.overflow='hidden';setTimeout(()=>{($('aid').value?$('apw'):$('aid')).focus()},50)}
 function closeAuth(){$('aov').classList.remove('on');document.body.style.overflow=''}
 // 이 브라우저에 다른 학생의 기록이 남아 있을 때 비운다
-function resetLocal(){for(const k in DONE)delete DONE[k];S={f:{},rows:{log:[{},{},{}],fb:[{},{}]}};document.querySelectorAll('[data-k]').forEach(el=>{el.value=''});$('gcode').value='';renderRows();save()}
+function resetLocal(){for(const k in DONE)delete DONE[k];MYNUM=null;S={f:{},rows:{log:[{},{},{}],fb:[{},{}]}};document.querySelectorAll('[data-k]').forEach(el=>{el.value=''});$('gcode').value='';renderRows();save()}
 async function doAuth(){
   const id=$('aid').value.trim(),pw=$('apw').value,err=m=>{$('aerr').textContent=m};
   if(!parseId(id))return err('학번은 숫자 5자리예요 (예: 20315)');
   if(!pw)return err('비밀번호를 입력하세요');
   let name='';
   if(amode==='register'){name=$('aname').value.trim();if(!name)return err('이름을 입력하세요');if(pw!==$('apw2').value)return err('비밀번호 두 칸이 서로 달라요')}
+  if(amode==='change'){if(pw!==$('apw2').value)return err('비밀번호 두 칸이 서로 달라요');if(pw===id)return err('학번이 아닌 새 비밀번호를 정해 주세요')}
   $('aok').disabled=true;err('확인하는 중… (몇 초 걸릴 수 있어요)');
   if(amode==='register'){const r0=await api('register',{studentId:id,name,password:pw});if(!r0.ok){$('aok').disabled=false;return err(r0.message)}}
-  const r=await api('login',{studentId:id,password:pw});$('aok').disabled=false;
+  let r;
+  if(amode==='change'&&PEND){r=await api('change_password',{studentId:PEND.sid,password:PEND.pw,newPassword:pw})}
+  else r=await api('login',{studentId:id,password:pw});
+  $('aok').disabled=false;
   if(!r.ok)return err(r.message);
+  if(r.data.mustChange){PEND={sid:id,pw};setAuthMode('change');$('apw').value='';$('apw2').value='';err('');$('apw').focus();return}
   if(!r.data.session)return err('로그인하지 못했어요. 선생님께 말해 주세요.');
+  if(amode==='change')toast('새 비밀번호를 정했어요. 다음부터는 새 비밀번호로 로그인하세요.',3500);
+  PEND=null;
   if(S.f.sid&&S.f.sid!==id){
     if(!confirm('이 컴퓨터에는 '+S.f.sid+' 학생의 기록이 남아 있어요.\n지우고 '+id+' 학생으로 새로 시작할까요?\n(남은 기록은 사라져요)'))return err('로그인을 취소했어요.');
     resetLocal()}
@@ -583,29 +589,33 @@ const DONE={};
 function markTodo(){document.querySelectorAll('.todo li[data-todo]').forEach(li=>{const k=li.dataset.todo;if(!k)return;const d=k==='sign'?signed():!!DONE[k];li.classList.toggle('done',d);li.classList.toggle('go',k==='sign'&&!d)})}
 document.querySelectorAll('.todo a').forEach(a=>a.addEventListener('click',e=>{const t=document.getElementById(a.getAttribute('href').slice(1));if(!t)return;e.preventDefault();t.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'center'});if(t.focus&&t.tagName==='BUTTON')setTimeout(()=>t.focus({preventScroll:true}),300)}));
 /* 투표 */
-const VK=['sci','fun','creative','practical'];
+let MYNUM=null;
 async function galleryNums(){
   const id=parseId(S.f.sid);if(!id)return null;
   try{const r=await fetch('data/class'+String(id.c).padStart(2,'0')+'.json',{cache:'no-store'});if(!r.ok)return null;
     const d=await r.json();return Array.isArray(d.games)&&d.games.length?d.games.map(g=>g.n):null}catch(e){return null}}
 async function submitVote(){
   if(!ready())return;
-  const votes={};
-  for(const k of VK){const v=$('v_'+k).value.trim();if(!/^\d{1,2}$/.test(v)||+v<1){$('vstate').textContent='❌ 번호 네 칸을 모두 1~99 숫자로 적어 주세요.';return}votes[k]=+v}
+  const v=$('v_pick').value.trim();
+  if(!/^\d{1,2}$/.test(v)||+v<1){$('vstate').textContent='❌ 작품 번호를 1~99 숫자로 적어 주세요.';return}
+  const pick=+v;
+  if(MYNUM&&pick===MYNUM){$('vstate').textContent='❌ '+pick+'번은 내 작품이에요. 다른 친구의 작품을 골라 주세요.';return}
   const nums=await galleryNums();
-  if(nums){const bad=VK.filter(k=>!nums.includes(votes[k]));if(bad.length){$('vstate').textContent='❌ 우리 반 갤러리에 없는 번호가 있어요: '+bad.map(k=>votes[k]).join(', ');return}}
+  if(nums&&!nums.includes(pick)){$('vstate').textContent='❌ '+pick+'번은 우리 반 갤러리에 없는 번호예요.';return}
   $('vbtn').disabled=true;$('vstate').textContent='제출하는 중…';
-  const r=await sapi('vote',{votes});$('vbtn').disabled=false;
+  const r=await sapi('vote',{pick});$('vbtn').disabled=false;
   if(!r.ok){$('vstate').textContent='❌ '+r.message;toast(r.message,3500);return}
-  $('vstate').textContent='✅ 투표했어요 ('+fmtT(r.data.savedAt)+'). 바꾸고 싶으면 다시 제출하세요.';DONE.vote=true;markTodo();toast('투표했어요!',2000)}
+  $('vstate').textContent='✅ '+r.data.pick+'번에 투표했어요 ('+fmtT(r.data.savedAt)+'). 바꾸고 싶으면 다시 제출하세요.';DONE.vote=true;markTodo();toast('투표했어요!',2000)}
 // 로그인 뒤 내 제출 현황을 불러와 화면에 표시
 async function loadStatus(){
   const r=await sapi('status');if(!r.ok)return;
   for(const sec of ['t1','t2','t3']){const at=r.data.notes&&r.data.notes[sec];DONE[sec]=!!at;$('ns_'+sec).textContent=at?'✅ 제출함 ('+fmtT(at)+')':'아직 제출하지 않았어요.'}
   const v=r.data.vote;
-  if(v&&v.votes)for(const k of VK){if(v.votes[k]!=null)$('v_'+k).value=v.votes[k]}
-  $('vstate').textContent=!r.data.voteOpen?'투표가 닫혀 있어요.':v?'✅ 투표함 ('+fmtT(v.at)+'). 바꾸려면 다시 제출하세요.':'아직 투표하지 않았어요.';
-  DONE.vote=!!v;$('vbtn').disabled=!r.data.voteOpen;markTodo()}
+  if(v&&v.pick)$('v_pick').value=v.pick;
+  MYNUM=r.data.myNumber||null;
+  $('vmine').hidden=!MYNUM;$('vmine').textContent=MYNUM?'내 작품은 '+MYNUM+'번이에요. 이 번호는 고를 수 없어요.':'';
+  $('vstate').textContent=!r.data.voteOpen?'투표가 닫혀 있어요.':!r.data.galleryReady?'아직 투표를 시작하지 않았어요. 선생님이 작품을 올리면 투표할 수 있어요.':v?'✅ '+v.pick+'번에 투표함 ('+fmtT(v.at)+'). 바꾸려면 다시 제출하세요.':'아직 투표하지 않았어요.';
+  DONE.vote=!!v;$('vbtn').disabled=!r.data.voteOpen||!r.data.galleryReady;markTodo()}
 function copySum(sec,name){if(!ready())return;copyRaw(buildSum(sec,name),'복사됨!')}
 
 /* 서명 팝업 */

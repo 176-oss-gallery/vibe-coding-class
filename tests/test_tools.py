@@ -235,27 +235,21 @@ class Pipeline(unittest.TestCase):
         self.assertIn('나다라', text)
 
 
-    def test_tally_excludes_self_votes(self):
+    def test_tally_single_pick(self):
         C.PRIVATE.mkdir(parents=True, exist_ok=True)
         C.write_csv(C.MAPPING, C.MAPPING_FIELDS, [
-            {'학번': '31001', '이름': 'a', '반': 10, '번호': 1, '코드': 'c1', '해시': '', '공개': 'Y'},
-            {'학번': '31002', '이름': 'b', '반': 10, '번호': 2, '코드': 'c2', '해시': '', '공개': 'Y'}])
+            {'학번': '31001', '이름': 'a', '반': 10, '번호': 1, '코드': 'c1', '해시': '', '공개': 'Y'}])
         votes = TMP / 'votes.csv'
-        votes.write_text('학번,반,정확,재미,창의,실용\n'
-                         '31001,310,1,2,2,3\n'   # 정확 1번은 자기 작품 → 뺌
-                         '31002,310,1,2,2,2\n'   # 재미 2·창의 2·실용 2는 자기 작품 → 뺌
-                         '31003,310,1,2,3,3\n'
-                         '21105,211,9,9,9,9\n', encoding='utf-8-sig')
+        votes.write_text('학번,반,번호' + chr(10) + '31001,10,1' + chr(10) + '31002,10,3' + chr(10) + '31003,10,3' + chr(10)
+                         + '31004,10,2' + chr(10) + '21105,11,9' + chr(10) + 'bad,10,1' + chr(10), encoding='utf-8-sig')
         lines = []
         r = tally.tally(votes, out=lines.append)
-        self.assertEqual(r[10]['정확'], [(1, 2)], '31001 의 정확 1번(자기 작품)은 빠짐')
-        self.assertEqual(r[10]['재미'], [(2, 2)], '31002 의 재미 2번은 빠짐')
-        self.assertEqual(r[10]['실용'][0], (3, 2))
-        self.assertEqual(r[11]['정확'], [(9, 1)])
-        text = '\n'.join(lines)
-        self.assertIn('자기 작품에 준 표 4건', text)
+        self.assertEqual(r[10], [(3, 2), (2, 1)], '득표 순, 31001 의 자기 작품 표는 빠짐')
+        self.assertEqual(r[11], [(9, 1)])
+        text = chr(10).join(lines)
+        self.assertIn('10반 (투표 3명): 3번(2표), 2번(1표)', text)
+        self.assertIn('자기 작품에 준 표 1건', text)
         self.assertNotIn('31001', text, '학번은 출력하지 않음')
-        self.assertIn('mapping.csv 에 없는 학번 2명', text)
 
 
 if __name__ == '__main__':
