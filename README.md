@@ -20,7 +20,8 @@
       → publish.py 로 공개 → git push → GitHub Pages 갤러리에 반영
       (Claude 에게 "이 반 점검하고 올려 줘"라고 시켜도 됨. 공개 직전에는 꼭 확인함)
 학생: 갤러리에서 우리 반 작품 플레이 → 앱 4차시 탭에서 번호로 투표
-교사: 관리자 화면에서 투표 내려받기 → python tools/tally.py votes.csv (자기 작품 표는 뺌)
+교사: 갤러리 공개 뒤 관리자 화면에 작품 번호 명단(mapping.csv) 올리기 → 학생은 작품 하나에 투표(자기 작품은 막힘)
+      → 관리자 화면 [투표 집계 보기] 또는 python tools/tally.py votes.csv
 ```
 
 공개되는 파일 이름과 갤러리 화면에는 **학번·이름이 나오지 않습니다.** 대응표(`private/mapping.csv`)는 선생님 컴퓨터에만 있고 저장소에 올라가지 않습니다(`.gitignore`로 제외).

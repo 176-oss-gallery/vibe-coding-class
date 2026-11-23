@@ -300,7 +300,7 @@ function makeDeps(over) {
     accounts: [], fails: {}, pepper: PEPPER, saltSeq: 0, sessions: new Map(), sv: {}, globalFails: 0,
     inLock: false, lockHashes: 0, hashedInLock: false,
     roster: { '10101': '김하늘', '10102': '이바다', '10103': '박구름' },
-    bindings: [], subs: [], notes: [], votes: [], files: new Map(), rateOk: true, discarded: [], logs: [], lockOk: true, locks: 0, releases: 0, seq: 0,
+    bindings: [], subs: [], notes: [], votes: [], gallery: [], files: new Map(), rateOk: true, discarded: [], logs: [], lockOk: true, locks: 0, releases: 0, seq: 0,
     t: Date.parse('2026-11-20T01:00:00Z')
   };
   const deps = {
@@ -338,10 +338,12 @@ function makeDeps(over) {
     appendBinding: (row) => { st.bindings.push(Object.assign({}, row)); },
     readSubmissions: () => st.subs.map((r) => Object.assign({}, r)),
     appendNote: (n) => { st.notes.push(Object.assign({}, n)); },
-    appendVote: (v) => { st.votes.push(Object.assign({}, v, { votes: Object.assign({}, v.votes) })); },
+    appendVote: (v) => { st.votes.push(Object.assign({}, v)); },
     readNotesMeta: () => st.notes.map((n) => ({ at: n.at, id: n.id, section: n.section })),
     readNotes: () => st.notes.map((n) => Object.assign({}, n)),
-    readVotes: () => st.votes.map((v) => Object.assign({}, v, { votes: Object.assign({}, v.votes) })),
+    readVotes: () => st.votes.map((v) => Object.assign({}, v)),
+    readGallery: () => st.gallery.map((g) => Object.assign({}, g)),
+    writeGallery: (rows) => { st.gallery = rows.map((g) => Object.assign({}, g)); },
     voteOpen: () => st.cfg.vote_open !== false,
     saveFile: (name, text) => {
       if (st.files.has(name)) throw new Error('덮어쓰기 시도: ' + name);
@@ -838,7 +840,14 @@ test('관리자 목록: 학번·이름으로 찾기, 제출 수·최근 제출, 
   let r = J(G.adminRows(accounts, subs, '', ['20316']));
   assert.strictEqual(r.total, 2);
   eq(r.rows.map((x) => x.id), ['20315', '20316'], '학번 순');
-  eq(r.rows[0], { id: '20315', name: '김 하늘', registeredAt: '', reset: true, locked: false, count: 2, lastAt: '2026-11-20T03:00:00.000Z' });
+  eq(r.rows[0], { id: '20315', name: '김 하늘', registeredAt: '', reset: true, locked: false, count: 2, lastAt: '2026-11-20T03:00:00.000Z',
+    t1: '', t2: '', t3: '', voteAt: '', pick: null });
+  // 제출 여부: 글 구간별 마지막 시각, 마지막 투표
+  const meta = [{ id: '20316', section: 't1', at: new Date('2026-11-20T04:00:00Z') }, { id: '20316', section: 't1', at: new Date('2026-11-20T05:00:00Z') },
+    { id: '20316', section: 't3', at: new Date('2026-11-20T06:00:00Z') }, { id: '20316', section: 'zz', at: new Date('2026-11-20T06:00:00Z') }];
+  const vts = [{ id: '20316', at: new Date('2026-11-20T07:00:00Z'), pick: 3 }, { id: '20316', at: new Date('2026-11-20T08:00:00Z'), pick: 5 }];
+  const r2 = J(G.adminRows(accounts, subs, '20316', [], meta, vts)).rows[0];
+  eq([r2.t1, r2.t2, r2.t3, r2.voteAt, r2.pick], ['2026-11-20T05:00:00.000Z', '', '2026-11-20T06:00:00.000Z', '2026-11-20T08:00:00.000Z', 5]);
   assert.strictEqual(r.rows[1].locked, true);
   assert.ok(!JSON.stringify(r).includes('H1') && !JSON.stringify(r).includes('S2'), '해시·솔트 노출');
   eq(J(G.adminRows(accounts, subs, '김하늘', [])).rows.map((x) => x.id), ['20315'], '이름 공백 무시');
@@ -878,27 +887,33 @@ test('글 제출(note): 세션 필요, 구간·길이 검사, 다시 내면 추�
   assert.strictEqual(pcall(deps, { action: 'note', session: sess, section: 't2', text: 'a' }).code, 'SESSION_CLOSED');
 });
 
-test('투표(vote): 네 부문 1~99 정수, 반은 학번에서, 닫으면 거부, 현황에 마지막 투표', () => {
+test('투표(vote): 작품 번호 하나, 명단에 있는 우리 반 번호만, 내 작품은 거부, 닫으면 거부, 현황에 마지막 투표·내 번호', () => {
   const { deps, st } = pwDeps();
   st.cfg.roster_required = false;
   const sess = pwLogin(deps, '31040', '김하늘');
-  const ok = { sci: 3, fun: '12', creative: 5, practical: 99 };
-  const bads = [null, [], {}, { sci: 1, fun: 1, creative: 1 }, { sci: 0, fun: 1, creative: 1, practical: 1 }, { sci: 100, fun: 1, creative: 1, practical: 1 },
-    { sci: 1.5, fun: 1, creative: 1, practical: 1 }, { sci: -1, fun: 1, creative: 1, practical: 1 }, { sci: 'a', fun: 1, creative: 1, practical: 1 },
-    { sci: '1e1', fun: 1, creative: 1, practical: 1 }];
-  for (const bad of bads) assert.strictEqual(pcall(deps, { action: 'vote', session: sess, votes: bad }).code, 'BAD_REQUEST', JSON.stringify(bad));
-  assert.strictEqual(pcall(deps, { action: 'vote', votes: ok }).code, 'BAD_REQUEST', '세션 없음');
-  const r = pcall(deps, { action: 'vote', session: sess, votes: ok, cls: '399' });
+  // 명단이 없으면 투표를 받지 않음
+  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: 3 }).code, 'VOTE_NOT_READY');
+  let stt = pcall(deps, { action: 'status', session: sess });
+  assert.strictEqual(stt.galleryReady, false);
+  assert.strictEqual(stt.myNumber, null);
+  // 10반 작품 1~5번, 31040 은 4번. 다른 반(310 이 아닌 3학년 11반) 7번
+  st.gallery = [1, 2, 3, 5].map((n) => ({ id: '3100' + n, cls: 10, n })).concat([{ id: '31040', cls: 10, n: 4 }, { id: '31101', cls: 11, n: 7 }]);
+  for (const bad of [null, 0, 100, 1.5, -1, 'a', '1e1', {}, [3]]) assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: bad }).code, 'BAD_REQUEST', JSON.stringify(bad));
+  assert.strictEqual(pcall(deps, { action: 'vote', pick: 3 }).code, 'BAD_REQUEST', '세션 없음');
+  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: 4 }).code, 'SELF_VOTE', '내 작품');
+  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: 7 }).code, 'NOT_IN_GALLERY', '다른 반 번호');
+  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: 9 }).code, 'NOT_IN_GALLERY', '없는 번호');
+  assert.strictEqual(st.votes.length, 0);
+  const r = pcall(deps, { action: 'vote', session: sess, pick: '3', cls: 11, studentId: '10101' });
   assert.strictEqual(r.ok, true, JSON.stringify(r));
-  eq(st.votes[0].votes, { sci: 3, fun: 12, creative: 5, practical: 99 });
-  assert.strictEqual(st.votes[0].cls, '310', '반은 학번에서');
-  pcall(deps, { action: 'vote', session: sess, votes: { sci: 1, fun: 2, creative: 3, practical: 4 } });
-  const stt = pcall(deps, { action: 'status', session: sess });
-  eq(stt.vote.votes, { sci: 1, fun: 2, creative: 3, practical: 4 }, '가장 나중 투표');
-  assert.strictEqual(stt.voteOpen, true);
+  eq([st.votes[0].id, st.votes[0].cls, st.votes[0].pick], ['31040', 10, 3], '학번·반은 세션에서');
+  pcall(deps, { action: 'vote', session: sess, pick: 5 });
+  stt = pcall(deps, { action: 'status', session: sess });
+  assert.strictEqual(stt.vote.pick, 5, '가장 나중 투표');
+  assert.strictEqual(stt.myNumber, 4);
+  assert.strictEqual(stt.galleryReady, true);
   st.cfg.vote_open = false;
-  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, votes: ok }).code, 'VOTE_CLOSED');
-  assert.strictEqual(pcall(deps, { action: 'status', session: sess }).voteOpen, false);
+  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: 3 }).code, 'VOTE_CLOSED');
   assert.strictEqual(st.locks, st.releases);
 });
 
@@ -913,30 +928,44 @@ test('글·투표·현황은 구글 방식에서는 거부, 현황은 글 내용
   assert.ok(!JSON.stringify(pcall(deps, { action: 'status', session: sess })).includes('XYZ'));
 });
 
-test('관리자 투표 집계: 투표자마다 마지막 한 번, 반별·부문별 득표 순', () => {
+test('관리자 투표 집계: 투표자마다 마지막 한 번, 반(반 번호)별 득표 순, CSV', () => {
   const T = (m) => new Date(Date.parse('2026-11-20T01:00:00Z') + m * 60000);
   const votes = [
-    { id: '31001', at: T(1), votes: { sci: 3, fun: 5, creative: 5, practical: 1 } },
-    { id: '31001', at: T(5), votes: { sci: 4, fun: 5, creative: 5, practical: 1 } },
-    { id: '31002', at: T(2), votes: { sci: 4, fun: 6, creative: 5, practical: 2 } },
-    { id: '31003', at: T(3), votes: { sci: 4, fun: 6, creative: 7, practical: 2 } },
-    { id: '21005', at: T(4), votes: { sci: 9, fun: 9, creative: 9, practical: 9 } },
-    { id: 'bad', at: T(4), votes: { sci: 1, fun: 1, creative: 1, practical: 1 } }
+    { id: '31001', at: T(1), pick: 3 }, { id: '31001', at: T(5), pick: 4 },
+    { id: '31002', at: T(2), pick: 4 }, { id: '31003', at: T(3), pick: 2 },
+    { id: '21105', at: T(4), pick: 9 }, { id: 'bad', at: T(4), pick: 1 }, { id: '31004', at: T(4), pick: 0 }
   ];
   const t = J(G.adminTally(votes));
-  eq(t.map((c) => [c.key, c.label, c.voters]), [['210', '2학년 10반', 1], ['310', '3학년 10반', 3]]);
-  const c = t[1];
-  eq(c.cats.sci, [{ n: 4, count: 3 }], '마지막 표만 셈(3번 표는 사라짐)');
-  eq(c.cats.fun, [{ n: 6, count: 2 }, { n: 5, count: 1 }]);
-  eq(c.cats.creative, [{ n: 5, count: 2 }, { n: 7, count: 1 }]);
+  eq(t.map((c) => [c.key, c.label, c.voters]), [['10', '10반', 3], ['11', '11반', 1]]);
+  eq(t[0].top, [{ n: 4, count: 2 }, { n: 2, count: 1 }], '마지막 표만, 득표 순');
   const d = { readVotes: () => votes, voteOpen: () => true };
   assert.strictEqual(J(G.adminHandle(d, 'tally', '')).voteOpen, true);
   const v = J(G.adminHandle(d, 'votes', ''));
-  assert.strictEqual(v.ok, true);
   assert.strictEqual(v.count, 4);
-  assert.ok(v.csv.startsWith('﻿"학번","반"'));
-  assert.ok(v.csv.includes('"31001","310","4","5","5","1"'), '31001 은 마지막 표');
-  assert.ok(!v.csv.includes('bad'));
+  assert.ok(v.csv.startsWith('﻿"학번","반","번호"'));
+  assert.ok(v.csv.includes('"31001","10","4"'), '31001 은 마지막 표');
+  assert.ok(!v.csv.includes('bad') && !v.csv.includes('31004'));
+});
+
+test('작품 번호 명단: mapping.csv 그대로 붙여넣기(공개 Y 만), 머리글 없는 형식, 잘못된 줄은 건너뜀, 올리면 통째로 바뀜', () => {
+  const csv = '﻿학번,이름,반,번호,코드,해시,공개\r\n31001,가,10,1,abcde,h,Y\r\n31002,나,10,2,bcdef,h,\r\n31003,다,10,3,cdefg,h,Y\r\n' +
+    '31104,라,11,1,defgh,h,Y\r\n31005,마,11,5,x,h,Y\r\n31006,바,10,3,y,h,Y\r\n31001,가,10,9,z,h,Y\r\n';
+  let r = J(G.parseGalleryText(csv));
+  eq(r.rows, [{ id: '31001', cls: 10, n: 1 }, { id: '31003', cls: 10, n: 3 }, { id: '31104', cls: 11, n: 1 }]);
+  assert.strictEqual(r.skipped, 4, '비공개·반 불일치·번호 중복·학번 중복');
+  eq(J(G.parseGalleryText('31001\t10\t2\n31002\t10\t3')).rows.map((x) => x.n), [2, 3], '탭·머리글 없음');
+  for (const bad of ['', '   ', 5, null, '학번,이름\n31001,가', 'x'.repeat(G.GALLERY_TEXT_MAX + 1)]) assert.strictEqual(G.parseGalleryText(bad), null, String(bad).slice(0, 20));
+  const { deps, st } = makeDeps();
+  st.gallery = [{ id: '39999', cls: 99, n: 1 }];
+  r = J(G.adminHandle(deps, 'gallery_set', csv));
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(r.count, 3);
+  eq(r.classes, ['10반 2개', '11반 1개']);
+  assert.strictEqual(st.gallery.length, 3, '이전 명단은 지워짐');
+  eq(J(G.adminHandle(deps, 'gallery_info', '')).classes, ['10반 2개', '11반 1개']);
+  assert.strictEqual(J(G.adminHandle(deps, 'gallery_set', '학번,반,번호,공개\n31001,10,1,N')).code, 'BAD_REQUEST', '올릴 줄 없음');
+  assert.strictEqual(st.gallery.length, 3, '실패하면 그대로');
+  assert.strictEqual(st.locks, st.releases);
 });
 
 test('관리자 글 보기: 한 학생의 구간별 마지막 글·횟수, 없는 구간은 빈 칸, 잘못된 학번 거부', () => {
@@ -948,8 +977,14 @@ test('관리자 글 보기: 한 학생의 구간별 마지막 글·횟수, 없�
     { id: '31002', at: T(4), section: 't1', text: '다른 학생' },
     { id: '31001', at: T(5), section: 'zz', text: '잘못된 구간' }
   ];
-  const d = { readAccounts: () => [{ id: '31001', name: '김하늘', hash: 'H', salt: 'S' }], readNotes: () => notes };
+  const d = { readAccounts: () => [{ id: '31001', name: '김하늘', hash: 'H', salt: 'S' }], readNotes: () => notes,
+    readSubmissions: () => [{ id: '31001', at: T(1), version: 1 }, { id: '31001', at: T(6), version: 2 }, { id: '31002', at: T(7), version: 1 }],
+    readVotes: () => [{ id: '31001', at: T(2), pick: 3 }, { id: '31001', at: T(8), pick: 5 }],
+    readGallery: () => [{ id: '31001', cls: 10, n: 4 }] };
   const r = J(G.adminHandle(d, 'note_view', ' 31001 '));
+  eq(r.game, { count: 2, lastAt: T(6).toISOString(), version: 2 });
+  eq(r.vote, { pick: 5, at: T(8).toISOString() });
+  assert.strictEqual(r.myNumber, 4);
   assert.strictEqual(r.ok, true, JSON.stringify(r));
   assert.strictEqual(r.name, '김하늘');
   eq(r.sections.map((x) => [x.section, x.times, x.text]), [['t1', 2, '<b>새 기획</b>'], ['t2', 0, ''], ['t3', 1, '소감']]);
@@ -962,6 +997,7 @@ test('관리자 글 보기: 한 학생의 구간별 마지막 글·횟수, 없�
   assert.strictEqual(none.ok, true);
   assert.strictEqual(none.name, '');
   assert.ok(none.sections.every((x) => x.times === 0));
+  eq([none.game.count, none.vote, none.myNumber], [0, null, null]);
 });
 
 test('관리자 화면: 학생 글은 textContent 로만 넣음(innerHTML 없음)', () => {
@@ -969,9 +1005,9 @@ test('관리자 화면: 학생 글은 textContent 로만 넣음(innerHTML 없음
   assert.ok(G.ADMIN_HTML.includes('pre.textContent=s.text'));
 });
 
-test('관리자 글 CSV: 학번·구간마다 가장 나중 글, 반 필터, 수식 방지, 이름 붙임', () => {
+test('관리자 글 CSV: 학생 한 명이 한 줄, 1·2·4차시 글이 나란히(각각 가장 나중), 안 낸 학생도 줄, 반 필터, 수식 방지', () => {
   const T = (m) => new Date(Date.parse('2026-11-20T01:00:00Z') + m * 60000);
-  const accounts = [{ id: '31001', name: '김하늘' }, { id: '31002', name: '이바다' }, { id: '21005', name: '박구름' }];
+  const accounts = [{ id: '31001', name: '김하늘' }, { id: '31002', name: '이바다' }, { id: '31003', name: '안냄' }, { id: '21005', name: '박구름' }];
   const notes = [
     { id: '31001', at: T(1), section: 't1', text: '옛 글' },
     { id: '31001', at: T(3), section: 't1', text: '[1차시] 서약서: 2026. 11. 20. 서명 완료\n"따옴표", 쉼표' },
@@ -984,15 +1020,16 @@ test('관리자 글 CSV: 학번·구간마다 가장 나중 글, 반 필터, 수
   const r = J(G.adminHandle(d, 'notes', '310'));
   assert.strictEqual(r.ok, true, JSON.stringify(r));
   assert.strictEqual(r.name, 'notes_310.csv');
-  assert.strictEqual(r.count, 3);
-  assert.ok(r.csv.startsWith('﻿"학번","이름","구간","제출시각","글"'));
+  assert.strictEqual(r.count, 3, '안 낸 학생도 줄');
+  const lines = r.csv.replace('﻿', '').trim().split('\r\n');
+  assert.strictEqual(lines[0], '"학번","이름","1차시 기획서","1차시 기획서 제출시각","2~3차시 제작 기록","2~3차시 제작 기록 제출시각","4차시 소감","4차시 소감 제출시각"');
+  assert.ok(lines[1].startsWith('"31001","김하늘","[1차시] 서약서: 2026. 11. 20. 서명 완료'), lines[1].slice(0, 60));
+  assert.ok(lines[1].includes('""따옴표"", 쉼표') && lines[1].includes('"\'=HYPERLINK('), '이스케이프·수식 방지');
+  assert.ok(lines.some((l) => l.startsWith('"31003","안냄","",""')), '안 낸 학생은 빈칸');
   assert.ok(!r.csv.includes('옛 글') && !r.csv.includes('다른 반') && !r.csv.includes('잘못된'));
-  assert.ok(r.csv.includes('"31001","김하늘","t1"'));
-  assert.ok(r.csv.includes('"\'=HYPERLINK('), '수식으로 시작하는 글은 앞에 작은따옴표');
-  assert.ok(r.csv.includes('""따옴표"", 쉼표'), '따옴표 이스케이프');
   assert.strictEqual(J(G.adminHandle(d, 'notes', '')).count, 4, '전체');
   assert.strictEqual(J(G.adminHandle(d, 'notes', '399')).code, 'BAD_REQUEST');
-  assert.strictEqual(J(G.adminHandle(d, 'notes', '110')).code, 'NOT_FOUND');
+  assert.strictEqual(J(G.adminHandle({ readAccounts: () => [], readNotes: () => [] }, 'notes', '110')).code, 'NOT_FOUND');
 });
 
 test('관리자 zip: 학번마다 최신 버전만, 반 단위, 파일 ID 없는 행 제외', () => {
@@ -1037,7 +1074,7 @@ test('관리자 화면: 스크립트 문법이 맞고 서버 호출 이름이 �
   const m = /<script>([\s\S]*)<\/script>/.exec(G.ADMIN_HTML);
   assert.ok(m, '스크립트 없음');
   new vm.Script(m[1]); // 문법 오류면 여기서 던짐
-  for (const fn of ['adminInfo', 'adminList', 'adminReset', 'adminClasses', 'adminZip', 'adminNotes', 'adminVotes', 'adminTallyView', 'adminNoteView']) {
+  for (const fn of ['adminInfo', 'adminList', 'adminReset', 'adminClasses', 'adminZip', 'adminNotes', 'adminVotes', 'adminTallyView', 'adminNoteView', 'adminGalleryInfo', 'adminSetGallery']) {
     assert.strictEqual(typeof G[fn], 'function', fn);
     assert.ok(G.ADMIN_HTML.includes('.' + fn + '('), '화면이 ' + fn + ' 를 부르지 않음');
   }
