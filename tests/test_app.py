@@ -20,7 +20,7 @@ def iso():
 class Fake:
     """앱스크립트 서버 흉내: 등록·로그인·글·투표·제출·현황"""
     def __init__(s):
-        s.accounts, s.notes, s.votes, s.subs, s.calls = {}, [], [], [], []
+        s.accounts, s.notes, s.likes, s.subs, s.calls = {}, [], {}, [], []
         s.fail_submit, s.expire, s.vote_open = None, False, True
         s.my_number = 2  # 가짜 명단: 이 학생 작품은 2번
         s.resets = set()  # 선생님이 초기화한 학번(비밀번호=학번)
@@ -49,18 +49,19 @@ class Fake:
         if s.expire or not sess.startswith('S'): return bad('SESSION_EXPIRED', '로그인이 만료되었어요.')
         sid = sess[1:6]
         if a == 'note': s.notes.append((sid, body['section'], body['text'])); return o(section=body['section'], savedAt=iso(), length=len(body['text']))
-        if a == 'vote':
-            if not s.vote_open: return bad('VOTE_CLOSED', '투표가 닫혔어요. 선생님께 물어보세요.')
-            if body.get('pick') == s.my_number: return bad('SELF_VOTE', '내 작품에는 투표할 수 없어요. 다른 친구의 작품을 골라 주세요.')
-            s.votes.append((sid, body['pick'])); return o(savedAt=iso(), pick=body['pick'])
+        if a == 'like':
+            if not s.vote_open: return bad('VOTE_CLOSED', '좋아요가 닫혔어요. 선생님께 물어보세요.')
+            if body.get('n') == s.my_number: return bad('SELF_VOTE', '내 작품에는 좋아요를 누를 수 없어요.')
+            mine = s.likes.setdefault(sid, set())
+            (mine.add if body['on'] else mine.discard)(body['n'])
+            return o(savedAt=iso(), n=body['n'], on=body['on'])
         if a == 'submit':
             if s.fail_submit: return bad(*s.fail_submit)
             s.subs.append((sid, body['html'], body['requestId']))
             return o(studentId=sid, version=len([x for x in s.subs if x[0] == sid]), size=len(body['html']), sha256='x', submittedAt=iso())
         if a == 'status':
             notes = {sec: iso() for (i, sec, t) in s.notes if i == sid}
-            vote = next(({'at': iso(), 'pick': v} for (i, v) in reversed(s.votes) if i == sid), None)
-            return o(notes=notes, vote=vote, voteOpen=s.vote_open, sessionOpen=True, galleryReady=True, myNumber=s.my_number)
+            return o(notes=notes, likes=sorted(s.likes.get(sid, set())), voteOpen=s.vote_open, sessionOpen=True, galleryReady=True, myNumber=s.my_number)
         return bad('BAD_REQUEST', '요청 형식이 올바르지 않아요.')
 
 
@@ -240,19 +241,22 @@ with sync_playwright() as p:
     # 4차시
     pg.click('#nav button[data-t=t3]'); ok('4차시 탭에 갤러리 iframe', pg.locator('#galframe').count() == 1)
     ok('구글 폼 링크 없음', pg.locator('a[href*="forms.gle"]').count() == 0 and pg.locator('[data-link]').count() == 0)
-    pg.click('#vbtn'); ok('투표: 빈 칸 막힘', '1~99' in pg.inner_text('#vstate'))
-    ok('투표: 내 작품 번호 안내', pg.is_visible('#vmine') and '2번' in pg.inner_text('#vmine'), pg.inner_text('#vmine'))
-    pg.fill('#v_pick', '50'); pg.click('#vbtn'); pg.wait_for_function('document.getElementById("vstate").innerText.includes("없는 번호")')
-    ok('투표: 우리 반 갤러리에 없는 번호 막힘', '50' in pg.inner_text('#vstate') and not fake.votes, pg.inner_text('#vstate'))
-    n_calls = len(fake.calls)
-    pg.fill('#v_pick', '2'); pg.click('#vbtn'); pg.wait_for_function('document.getElementById("vstate").innerText.includes("내 작품")')
-    ok('투표: 내 작품은 앱이 먼저 막음(서버에 안 보냄)', not fake.votes and len(fake.calls) == n_calls, pg.inner_text('#vstate'))
-    pg.fill('#v_pick', '4'); pg.click('#vbtn'); pg.wait_for_function('document.getElementById("vstate").innerText.includes("투표했어요")')
-    ok('투표 전달: 번호 하나만, 반·학번은 보내지 않음', fake.votes and fake.votes[-1][1] == 4 and '4번에 투표' in pg.inner_text('#vstate')
-       and all(set(c) <= {'action', 'session', 'pick'} for c in fake.calls if c['action'] == 'vote'))
+    gal = pg.frame_locator('#galframe')
+    gal.locator('button.like[data-n="1"]').wait_for()
+    btn = lambda n: gal.locator('button.like[data-n="%d"]' % n)
+    ok('좋아요: 카드마다 ♡ 버튼', gal.locator('button.like').count() == 5 and '좋아요' in btn(1).inner_text(), btn(1).inner_text())
+    ok('좋아요: 내 작품(2번)은 못 누름', btn(2).is_disabled() and '내 작품' in btn(2).inner_text())
+    ok('좋아요: 안내에 내 작품 번호', '2번' in pg.inner_text('#likeinfo'), pg.inner_text('#likeinfo'))
+    btn(1).click(); pg.wait_for_function('document.getElementById("likeinfo").innerText.includes("1개")')
+    btn(4).click(); pg.wait_for_function('document.getElementById("likeinfo").innerText.includes("2개")')
+    ok('좋아요: 여러 개 누르기', fake.likes.get('20315') == {1, 4} and btn(1).get_attribute('aria-pressed') == 'true' and '♥' in btn(4).inner_text())
+    ok('좋아요 전달: 번호와 누름 여부만(학번·반 안 보냄)', all(set(c) <= {'action', 'session', 'n', 'on'} for c in fake.calls if c['action'] == 'like'))
+    ok('할 일: 좋아요 누르면 체크', pg.eval_on_selector('#t3 .todo li[data-todo=like]', 'e=>e.classList.contains("done")'))
+    btn(1).click(); pg.wait_for_function('document.getElementById("likeinfo").innerText.includes("1개")')
+    ok('좋아요: 다시 누르면 취소', fake.likes.get('20315') == {4} and btn(1).get_attribute('aria-pressed') == 'false')
     fake.vote_open = False
-    pg.click('#vbtn'); pg.wait_for_function('document.getElementById("vstate").innerText.includes("❌")')
-    ok('투표가 닫히면 이유 표시', '닫혔어요' in pg.inner_text('#vstate'), pg.inner_text('#vstate'))
+    btn(5).click(); pg.wait_for_function('document.getElementById("toast").innerText.includes("닫혔어요")')
+    ok('좋아요가 닫히면 이유 표시', 5 not in fake.likes.get('20315') and not btn(5).is_disabled(), pg.inner_text('#toast'))
     fake.vote_open = True
     pg.click('#nb_t3'); pg.wait_for_function('document.getElementById("ns_t3").innerText.includes("제출했어요")')
     ok('4차시 소감 제출', any(n[1] == 't3' for n in fake.notes))
@@ -274,8 +278,8 @@ with sync_playwright() as p:
     ok('새로고침 후 서약 유지', pg.inner_text('#pchip') == '서약 완료')
     pg.wait_for_function('document.getElementById("ns_t1").innerText.includes("제출함")')
     ok('다시 로그인하면 제출 현황 복원', '제출함' in pg.inner_text('#ns_t1'))
-    pg.click('#nav button[data-t=t3]'); pg.wait_for_function('document.getElementById("v_pick").value!==""')
-    ok('투표 현황 복원', pg.input_value('#v_pick') == '4' and '4번에 투표함' in pg.inner_text('#vstate'), pg.inner_text('#vstate'))
+    pg.click('#nav button[data-t=t3]'); pg.frame_locator('#galframe').locator('button.like[data-n="4"][aria-pressed="true"]').wait_for()
+    ok('좋아요 현황 복원(다시 로그인해도 눌러 둔 것 그대로)', '1개' in pg.inner_text('#likeinfo'), pg.inner_text('#likeinfo'))
     # 같은 컴퓨터에서 다른 학생이 로그인
     fake.accounts['10107'] = ('이서준', 'green-Forest-9q')
     msgs, answer = [], {'accept': False}

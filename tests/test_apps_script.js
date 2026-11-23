@@ -300,7 +300,7 @@ function makeDeps(over) {
     accounts: [], fails: {}, pepper: PEPPER, saltSeq: 0, sessions: new Map(), sv: {}, globalFails: 0,
     inLock: false, lockHashes: 0, hashedInLock: false,
     roster: { '10101': '김하늘', '10102': '이바다', '10103': '박구름' },
-    bindings: [], subs: [], notes: [], votes: [], gallery: [], files: new Map(), rateOk: true, discarded: [], logs: [], lockOk: true, locks: 0, releases: 0, seq: 0,
+    bindings: [], subs: [], notes: [], likes: [], gallery: [], files: new Map(), rateOk: true, discarded: [], logs: [], lockOk: true, locks: 0, releases: 0, seq: 0,
     t: Date.parse('2026-11-20T01:00:00Z')
   };
   const deps = {
@@ -338,10 +338,10 @@ function makeDeps(over) {
     appendBinding: (row) => { st.bindings.push(Object.assign({}, row)); },
     readSubmissions: () => st.subs.map((r) => Object.assign({}, r)),
     appendNote: (n) => { st.notes.push(Object.assign({}, n)); },
-    appendVote: (v) => { st.votes.push(Object.assign({}, v)); },
+    appendLike: (l) => { st.likes.push(Object.assign({}, l)); },
     readNotesMeta: () => st.notes.map((n) => ({ at: n.at, id: n.id, section: n.section })),
     readNotes: () => st.notes.map((n) => Object.assign({}, n)),
-    readVotes: () => st.votes.map((v) => Object.assign({}, v)),
+    readLikes: () => st.likes.map((l) => Object.assign({}, l)),
     readGallery: () => st.gallery.map((g) => Object.assign({}, g)),
     writeGallery: (rows) => { st.gallery = rows.map((g) => Object.assign({}, g)); },
     voteOpen: () => st.cfg.vote_open !== false,
@@ -841,13 +841,14 @@ test('관리자 목록: 학번·이름으로 찾기, 제출 수·최근 제출, 
   assert.strictEqual(r.total, 2);
   eq(r.rows.map((x) => x.id), ['20315', '20316'], '학번 순');
   eq(r.rows[0], { id: '20315', name: '김 하늘', registeredAt: '', reset: true, locked: false, count: 2, lastAt: '2026-11-20T03:00:00.000Z',
-    t1: '', t2: '', t3: '', voteAt: '', pick: null });
+    t1: '', t2: '', t3: '', likeCount: 0, likeAt: '' });
   // 제출 여부: 글 구간별 마지막 시각, 마지막 투표
   const meta = [{ id: '20316', section: 't1', at: new Date('2026-11-20T04:00:00Z') }, { id: '20316', section: 't1', at: new Date('2026-11-20T05:00:00Z') },
     { id: '20316', section: 't3', at: new Date('2026-11-20T06:00:00Z') }, { id: '20316', section: 'zz', at: new Date('2026-11-20T06:00:00Z') }];
-  const vts = [{ id: '20316', at: new Date('2026-11-20T07:00:00Z'), pick: 3 }, { id: '20316', at: new Date('2026-11-20T08:00:00Z'), pick: 5 }];
-  const r2 = J(G.adminRows(accounts, subs, '20316', [], meta, vts)).rows[0];
-  eq([r2.t1, r2.t2, r2.t3, r2.voteAt, r2.pick], ['2026-11-20T05:00:00.000Z', '', '2026-11-20T06:00:00.000Z', '2026-11-20T08:00:00.000Z', 5]);
+  const lks = [{ id: '20316', at: new Date('2026-11-20T07:00:00Z'), n: 3, on: true }, { id: '20316', at: new Date('2026-11-20T08:00:00Z'), n: 5, on: true },
+    { id: '20316', at: new Date('2026-11-20T09:00:00Z'), n: 3, on: false }];
+  const r2 = J(G.adminRows(accounts, subs, '20316', [], meta, lks)).rows[0];
+  eq([r2.t1, r2.t2, r2.t3, r2.likeCount, r2.likeAt], ['2026-11-20T05:00:00.000Z', '', '2026-11-20T06:00:00.000Z', 1, '2026-11-20T08:00:00.000Z'], '취소한 3번은 빠짐');
   assert.strictEqual(r.rows[1].locked, true);
   assert.ok(!JSON.stringify(r).includes('H1') && !JSON.stringify(r).includes('S2'), '해시·솔트 노출');
   eq(J(G.adminRows(accounts, subs, '김하늘', [])).rows.map((x) => x.id), ['20315'], '이름 공백 무시');
@@ -887,40 +888,37 @@ test('글 제출(note): 세션 필요, 구간·길이 검사, 다시 내면 추�
   assert.strictEqual(pcall(deps, { action: 'note', session: sess, section: 't2', text: 'a' }).code, 'SESSION_CLOSED');
 });
 
-test('투표(vote): 작품 번호 하나, 명단에 있는 우리 반 번호만, 내 작품은 거부, 닫으면 거부, 현황에 마지막 투표·내 번호', () => {
+test('좋아요(like): 우리 반 작품마다 누르기·취소, 여러 개, 내 작품·다른 반·명단 없음·닫힘은 거부, 현황에 지금 누른 것', () => {
   const { deps, st } = pwDeps();
   st.cfg.roster_required = false;
   const sess = pwLogin(deps, '31040', '김하늘');
-  // 명단이 없으면 투표를 받지 않음
-  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: 3 }).code, 'VOTE_NOT_READY');
+  assert.strictEqual(pcall(deps, { action: 'like', session: sess, n: 3, on: true }).code, 'VOTE_NOT_READY', '명단 없음');
   let stt = pcall(deps, { action: 'status', session: sess });
-  assert.strictEqual(stt.galleryReady, false);
-  assert.strictEqual(stt.myNumber, null);
-  // 10반 작품 1~5번, 31040 은 4번. 다른 반(310 이 아닌 3학년 11반) 7번
+  eq([stt.galleryReady, stt.myNumber, stt.likes], [false, null, []]);
   st.gallery = [1, 2, 3, 5].map((n) => ({ id: '3100' + n, cls: 10, n })).concat([{ id: '31040', cls: 10, n: 4 }, { id: '31101', cls: 11, n: 7 }]);
-  for (const bad of [null, 0, 100, 1.5, -1, 'a', '1e1', {}, [3]]) assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: bad }).code, 'BAD_REQUEST', JSON.stringify(bad));
-  assert.strictEqual(pcall(deps, { action: 'vote', pick: 3 }).code, 'BAD_REQUEST', '세션 없음');
-  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: 4 }).code, 'SELF_VOTE', '내 작품');
-  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: 7 }).code, 'NOT_IN_GALLERY', '다른 반 번호');
-  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: 9 }).code, 'NOT_IN_GALLERY', '없는 번호');
-  assert.strictEqual(st.votes.length, 0);
-  const r = pcall(deps, { action: 'vote', session: sess, pick: '3', cls: 11, studentId: '10101' });
-  assert.strictEqual(r.ok, true, JSON.stringify(r));
-  eq([st.votes[0].id, st.votes[0].cls, st.votes[0].pick], ['31040', 10, 3], '학번·반은 세션에서');
-  pcall(deps, { action: 'vote', session: sess, pick: 5 });
+  for (const bad of [{ n: 3 }, { n: 3, on: 'true' }, { n: 0, on: true }, { n: 100, on: true }, { n: 1.5, on: true }, { n: 'a', on: true }, { on: true }]) {
+    assert.strictEqual(pcall(deps, Object.assign({ action: 'like', session: sess }, bad)).code, 'BAD_REQUEST', JSON.stringify(bad));
+  }
+  assert.strictEqual(pcall(deps, { action: 'like', n: 3, on: true }).code, 'BAD_REQUEST', '세션 없음');
+  assert.strictEqual(pcall(deps, { action: 'like', session: sess, n: 4, on: true }).code, 'SELF_VOTE', '내 작품');
+  assert.strictEqual(pcall(deps, { action: 'like', session: sess, n: 7, on: true }).code, 'NOT_IN_GALLERY', '다른 반 번호');
+  assert.strictEqual(st.likes.length, 0);
+  for (const n of [3, 1, 5]) assert.strictEqual(pcall(deps, { action: 'like', session: sess, n, on: true, studentId: '10101' }).ok, true, '여러 개');
+  const off = pcall(deps, { action: 'like', session: sess, n: 1, on: false });
+  eq([off.ok, off.n, off.on], [true, 1, false], '취소');
+  eq([st.likes[0].id, st.likes[0].cls, st.likes[0].n, st.likes[0].on], ['31040', 10, 3, true], '학번·반은 세션에서');
   stt = pcall(deps, { action: 'status', session: sess });
-  assert.strictEqual(stt.vote.pick, 5, '가장 나중 투표');
+  eq(stt.likes, [3, 5], '지금 눌려 있는 것');
   assert.strictEqual(stt.myNumber, 4);
-  assert.strictEqual(stt.galleryReady, true);
   st.cfg.vote_open = false;
-  assert.strictEqual(pcall(deps, { action: 'vote', session: sess, pick: 3 }).code, 'VOTE_CLOSED');
+  assert.strictEqual(pcall(deps, { action: 'like', session: sess, n: 2, on: true }).code, 'VOTE_CLOSED');
   assert.strictEqual(st.locks, st.releases);
 });
 
 test('글·투표·현황은 구글 방식에서는 거부, 현황은 글 내용을 돌려주지 않음', () => {
   const g = makeDeps();
   g.st.cfg.auth_mode = 'google';
-  for (const a of ['note', 'vote', 'status']) assert.strictEqual(call(g.deps, { action: a, idToken: A, section: 't1', text: 'a', votes: {} }).code, 'BAD_REQUEST', a);
+  for (const a of ['note', 'like', 'status']) assert.strictEqual(call(g.deps, { action: a, idToken: A, section: 't1', text: 'a', votes: {} }).code, 'BAD_REQUEST', a);
   const { deps, st } = pwDeps();
   st.cfg.roster_required = false;
   const sess = pwLogin(deps, '31040', '김하늘');
@@ -928,23 +926,23 @@ test('글·투표·현황은 구글 방식에서는 거부, 현황은 글 내용
   assert.ok(!JSON.stringify(pcall(deps, { action: 'status', session: sess })).includes('XYZ'));
 });
 
-test('관리자 투표 집계: 투표자마다 마지막 한 번, 반(반 번호)별 득표 순, CSV', () => {
+test('관리자 좋아요 순위: 지금 눌려 있는 좋아요만, 반별 받은 수 많은 순, 누른 학생 수, CSV', () => {
   const T = (m) => new Date(Date.parse('2026-11-20T01:00:00Z') + m * 60000);
-  const votes = [
-    { id: '31001', at: T(1), pick: 3 }, { id: '31001', at: T(5), pick: 4 },
-    { id: '31002', at: T(2), pick: 4 }, { id: '31003', at: T(3), pick: 2 },
-    { id: '21105', at: T(4), pick: 9 }, { id: 'bad', at: T(4), pick: 1 }, { id: '31004', at: T(4), pick: 0 }
+  const likes = [
+    { id: '31001', at: T(1), n: 3, on: true }, { id: '31001', at: T(2), n: 4, on: true }, { id: '31001', at: T(3), n: 3, on: false },
+    { id: '31002', at: T(2), n: 4, on: true }, { id: '31002', at: T(3), n: 2, on: true },
+    { id: '31003', at: T(3), n: 4, on: false }, { id: '21105', at: T(4), n: 9, on: true }, { id: 'bad', at: T(4), n: 1, on: true }
   ];
-  const t = J(G.adminTally(votes));
-  eq(t.map((c) => [c.key, c.label, c.voters]), [['10', '10반', 3], ['11', '11반', 1]]);
-  eq(t[0].top, [{ n: 4, count: 2 }, { n: 2, count: 1 }], '마지막 표만, 득표 순');
-  const d = { readVotes: () => votes, voteOpen: () => true };
+  const t = J(G.adminTally(likes));
+  eq(t.map((c) => [c.key, c.label, c.voters]), [['10', '10반', 2], ['11', '11반', 1]], '취소만 한 31003 은 빠짐');
+  eq(t[0].top, [{ n: 4, count: 2 }, { n: 2, count: 1 }]);
+  const d = { readLikes: () => likes, voteOpen: () => true };
   assert.strictEqual(J(G.adminHandle(d, 'tally', '')).voteOpen, true);
   const v = J(G.adminHandle(d, 'votes', ''));
+  assert.strictEqual(v.name, 'likes.csv');
   assert.strictEqual(v.count, 4);
   assert.ok(v.csv.startsWith('﻿"학번","반","번호"'));
-  assert.ok(v.csv.includes('"31001","10","4"'), '31001 은 마지막 표');
-  assert.ok(!v.csv.includes('bad') && !v.csv.includes('31004'));
+  assert.ok(v.csv.includes('"31001","10","4"') && !v.csv.includes('"31001","10","3"'), '취소한 것은 빠짐');
 });
 
 test('작품 번호 명단: mapping.csv 그대로 붙여넣기(공개 Y 만), 머리글 없는 형식, 잘못된 줄은 건너뜀, 올리면 통째로 바뀜', () => {
@@ -979,12 +977,14 @@ test('관리자 글 보기: 한 학생의 구간별 마지막 글·횟수, 없�
   ];
   const d = { readAccounts: () => [{ id: '31001', name: '김하늘', hash: 'H', salt: 'S' }], readNotes: () => notes,
     readSubmissions: () => [{ id: '31001', at: T(1), version: 1 }, { id: '31001', at: T(6), version: 2 }, { id: '31002', at: T(7), version: 1 }],
-    readVotes: () => [{ id: '31001', at: T(2), pick: 3 }, { id: '31001', at: T(8), pick: 5 }],
+    readLikes: () => [{ id: '31001', at: T(2), n: 3, on: true }, { id: '31001', at: T(8), n: 5, on: true },
+      { id: '31002', at: T(8), n: 4, on: true }, { id: '31003', at: T(8), n: 4, on: true }, { id: '31003', at: T(9), n: 4, on: false }],
     readGallery: () => [{ id: '31001', cls: 10, n: 4 }] };
   const r = J(G.adminHandle(d, 'note_view', ' 31001 '));
   eq(r.game, { count: 2, lastAt: T(6).toISOString(), version: 2 });
-  eq(r.vote, { pick: 5, at: T(8).toISOString() });
+  eq(r.liked, [3, 5]);
   assert.strictEqual(r.myNumber, 4);
+  assert.strictEqual(r.received, 1, '31002 만 지금 눌러 둠');
   assert.strictEqual(r.ok, true, JSON.stringify(r));
   assert.strictEqual(r.name, '김하늘');
   eq(r.sections.map((x) => [x.section, x.times, x.text]), [['t1', 2, '<b>새 기획</b>'], ['t2', 0, ''], ['t3', 1, '소감']]);
@@ -997,7 +997,7 @@ test('관리자 글 보기: 한 학생의 구간별 마지막 글·횟수, 없�
   assert.strictEqual(none.ok, true);
   assert.strictEqual(none.name, '');
   assert.ok(none.sections.every((x) => x.times === 0));
-  eq([none.game.count, none.vote, none.myNumber], [0, null, null]);
+  eq([none.game.count, none.liked, none.myNumber, none.received], [0, [], null, null]);
 });
 
 test('관리자 화면: 학생 글은 textContent 로만 넣음(innerHTML 없음)', () => {

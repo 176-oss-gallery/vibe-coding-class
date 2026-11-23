@@ -30,6 +30,7 @@ h1{margin:10px 0 6px;font-size:clamp(30px,5.2vw,46px);line-height:1.15;font-weig
 @media (min-width:640px){.grid.classes{grid-template-columns:repeat(4,1fr)}}
 
 .grid>li{display:flex}
+.grid.games>li{flex-direction:column}
 .grid>li[hidden]{display:none}
 .grid>li>.tile{flex:1}
 .tile{position:relative;display:flex;flex-direction:column;justify-content:space-between;gap:10px;min-height:156px;padding:20px 16px 14px;background:var(--card);border:1px solid var(--line);border-radius:10px;text-decoration:none;overflow:hidden}
@@ -88,3 +89,12 @@ body.play{height:100vh;height:100dvh;display:flex;flex-direction:column}
 .embed .top,.embed footer{display:none}
 .embed .wrap{padding-top:8px;padding-bottom:8px}
 .embed body,.embed{background:transparent}
+
+/* 좋아요 (학생 앱 안에서만 보임) */
+[hidden]{display:none!important}
+.like{margin-top:6px;width:100%;font:inherit;font-size:14px;font-weight:700;padding:7px 10px;color:var(--ink);background:var(--card);border:2px solid var(--line);border-radius:8px;cursor:pointer}
+.like:hover{border-color:#d6336c}
+.like.on{background:#d6336c;border-color:#d6336c;color:#fff}
+.like[disabled]{opacity:.55;cursor:default}
+.like:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.play .like{width:auto;margin:0}

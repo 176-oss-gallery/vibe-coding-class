@@ -34,6 +34,48 @@
   }
   var LOAD_ERR = '주소(링크)로 접속했는지 확인하고, 그래도 안 되면 선생님께 알려 주세요.';
 
+  /* ---- 좋아요: 학생 앱 안에 끼워졌을 때만. 누르면 앱(부모 창)에 알리고, 앱이 로그인 정보로 서버에 보낸다 ---- */
+  var LIKE_ON = EMB && window.parent !== window;
+  var LK = { ready: false, can: false, own: null, mine: {}, msg: '', btns: [] };
+  function paintLikes() {
+    LK.btns.forEach(function (b) {
+      var n = Number(b.getAttribute('data-n')), on = !!LK.mine[n], own = LK.own === n;
+      b.hidden = !LK.ready;
+      b.disabled = !LK.can || own || b.getAttribute('data-busy') === '1';
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.textContent = own ? '내 작품' : (on ? '♥ 좋아요' : '♡ 좋아요');
+      b.title = own ? '내 작품에는 좋아요를 누를 수 없어요' : (!LK.can ? LK.msg : (on ? '다시 누르면 취소돼요' : ''));
+    });
+  }
+  function likeButton(n) {
+    var b = el('button', 'like');
+    b.type = 'button';
+    b.setAttribute('data-n', String(n));
+    b.hidden = true;
+    b.onclick = function () {
+      if (!LK.can || LK.own === n) return;
+      b.setAttribute('data-busy', '1'); paintLikes();
+      window.parent.postMessage({ type: 'vibe-like', n: n, on: !LK.mine[n] }, location.origin);
+    };
+    LK.btns.push(b);
+    paintLikes();
+    return b;
+  }
+  if (LIKE_ON) {
+    window.addEventListener('message', function (e) {
+      if (e.source !== window.parent || e.origin !== location.origin) return;
+      var d = e.data || {};
+      if (d.type !== 'vibe-likes') return;
+      LK.ready = true; LK.can = !!d.can; LK.own = typeof d.own === 'number' ? d.own : null; LK.msg = String(d.msg || '');
+      LK.mine = {};
+      (Array.isArray(d.liked) ? d.liked : []).forEach(function (n) { LK.mine[Number(n)] = true; });
+      LK.btns.forEach(function (b) { b.removeAttribute('data-busy'); });
+      paintLikes();
+    });
+    window.parent.postMessage({ type: 'vibe-likes-hello' }, location.origin);
+  }
+
   /* ---- 반 선택 ---- */
   function pageIndex() {
     var box = $('#classes');
@@ -65,6 +107,7 @@
     getJSON('../data/class' + pad(c) + '.json').then(function (d) {
       var g = d.games || [], tiles = [];
       $('#count').textContent = g.length ? '작품 ' + g.length + '개가 있어요.' : '';
+      if (LIKE_ON && $('#hint')) $('#hint').textContent = '해 보고 마음에 드는 작품마다 ♡ 좋아요를 눌러요. 여러 개 눌러도 돼요.';
       box.textContent = '';
       if (!g.length) {
         $('#find').hidden = true;
@@ -97,6 +140,7 @@
         if (x.desc) cap.appendChild(el('span', 'desc', x.desc));
         a.appendChild(cap);
         li.appendChild(a);
+        if (LIKE_ON) li.appendChild(likeButton(x.n));
         box.appendChild(li);
         tiles.push({ li: li, n: String(x.n) });
       });
@@ -122,6 +166,7 @@
       document.title = n + '번 ' + game.title + ' · 과학 게임 갤러리';
       $('#pno').textContent = String(n);
       $('#ptitle').textContent = game.title;
+      if (LIKE_ON) $('.name').insertAdjacentElement('afterend', likeButton(n));
       var src = '../games/' + pad(c) + '/' + game.code + '.html';
       var f = el('iframe');
       f.title = game.title;

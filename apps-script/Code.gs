@@ -53,7 +53,8 @@ var GOOGLE_ACTIONS = ['whoami', 'bind'];
 var PASSWORD_ACTIONS = ['register', 'login', 'change_password'];
 var SHARED_ACTIONS = ['submit', 'list_mine'];
 // 비밀번호 방식에서 세션으로만 쓰는 동작: 글 제출, 투표, 내 현황
-var SESSION_ACTIONS = ['note', 'vote', 'status'];
+var SESSION_ACTIONS = ['note', 'like', 'status'];
+var LIKE_PER_MINUTE = 60; // 좋아요는 여러 번 누르므로 제출보다 넉넉하게
 var NOTE_SECTIONS = ['t1', 't2', 't3'];
 var NOTE_MAX = 30000; // 글 한 칸(구글 시트 한 셀은 5만 자까지)
 var BODY_EXTRA = 64 * 1024;
@@ -73,11 +74,11 @@ var SHEETS = {
   Config: ['키', '값'],
   Accounts: ['학번', '이름', '비밀번호해시', '솔트', '등록시각', '초기화', '변경시각', '초기화시각'],
   Notes: ['시각', '학번', '구간', '글'],
-  Votes: ['시각', '학번', '반', '번호'],
+  Likes: ['시각', '학번', '반', '번호', '좋아요'], // 좋아요 누름(Y)·취소(N) 기록. (학번, 번호)마다 가장 나중 것이 지금 상태
   Gallery: ['학번', '반', '번호'] // 갤러리 작품 번호 명단(관리자가 올림). 자기 작품 투표를 막는 데 씀
 };
 // 텍스트 서식 열 (1부터): 학번·파일ID·해시·요청ID (숫자/지수로 바뀌지 않게)
-var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8], Accounts: [1, 3, 4], Notes: [2, 3, 4], Votes: [2], Gallery: [1] };
+var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8], Accounts: [1, 3, 4], Notes: [2, 3, 4], Likes: [2], Gallery: [1] };
 
 var CONFIG_DEFAULTS = [
   ['auth_mode', 'password'],   // password | google
@@ -87,7 +88,7 @@ var CONFIG_DEFAULTS = [
   ['max_html_bytes', 2097152],
   ['session_open', 'TRUE'],
   ['submit_per_minute', 5],  // 계정당 1분 제출 상한. 부하 시험(T11) 때만 50 정도로 올린다
-  ['vote_open', 'TRUE']      // FALSE면 투표를 받지 않음 (4차시 투표를 닫을 때)
+  ['vote_open', 'TRUE']      // FALSE면 좋아요를 받지 않음 (4차시가 끝나면 닫음)
 ];
 
 var MESSAGES = {
@@ -110,10 +111,10 @@ var MESSAGES = {
   LOCKED: '비밀번호를 여러 번 틀렸어요. 5분 뒤에 다시 하거나 선생님께 초기화를 부탁하세요.',
   WEAK_PASSWORD: '비밀번호를 입력해 주세요.',
   MUST_CHANGE_PASSWORD: '새 비밀번호를 먼저 정해 주세요.',
-  VOTE_CLOSED: '투표가 닫혔어요. 선생님께 물어보세요.',
-  VOTE_NOT_READY: '아직 우리 반 작품 번호가 준비되지 않았어요. 선생님께 말해 주세요.',
+  VOTE_CLOSED: '좋아요가 닫혔어요. 선생님께 물어보세요.',
+  VOTE_NOT_READY: '아직 좋아요를 누를 수 없어요. 선생님이 작품을 올리면 누를 수 있어요.',
   NOT_IN_GALLERY: '우리 반 갤러리에 없는 번호예요. 번호를 다시 확인해 주세요.',
-  SELF_VOTE: '내 작품에는 투표할 수 없어요. 다른 친구의 작품을 골라 주세요.',
+  SELF_VOTE: '내 작품에는 좋아요를 누를 수 없어요.',
   SESSION_EXPIRED: '로그인이 끝났어요. 다시 로그인해 주세요.'
 };
 var MSG_SAME_PASSWORD = '지금 비밀번호(학번)와 다른 새 비밀번호를 정해 주세요.';
@@ -507,7 +508,7 @@ function routePassword_(deps, cfg, req, action) {
     if (ss.fail) return ss.fail;
     var sidN = String(ss.acc.id).trim();
     if (action === 'note') return doNote_(deps, cfg, req, sidN);
-    if (action === 'vote') return doVote_(deps, cfg, req, sidN);
+    if (action === 'like') return doLike_(deps, cfg, req, sidN);
     return doStatus_(deps, cfg, sidN);
   }
   // submit·list_mine 은 세션 우선
@@ -586,23 +587,40 @@ function galleryFor_(gallery, sid) {
   return { nums: nums, mine: mine };
 }
 
-function doVote_(deps, cfg, req, sid) {
-  var pick = parsePick_(req.pick);
-  if (pick === null) return fail_('BAD_REQUEST');
+// 4차시 좋아요: 우리 반 작품마다 누르거나(on: true) 취소(on: false). 여러 작품에 누를 수 있고 내 작품은 안 됨
+function doLike_(deps, cfg, req, sid) {
+  var n = parsePick_(req.n);
+  if (n === null || typeof req.on !== 'boolean') return fail_('BAD_REQUEST');
   if (!cfg.vote_open) return fail_('VOTE_CLOSED');
   var g = galleryFor_(deps.readGallery(), sid);
   if (!g.nums.length) return fail_('VOTE_NOT_READY');
-  if (g.mine === pick) return fail_('SELF_VOTE');
-  if (g.nums.indexOf(pick) < 0) return fail_('NOT_IN_GALLERY');
-  if (!deps.rateLimit('vote:' + sid, cfg.submit_per_minute)) return fail_('BUSY', MSG_RATE_LIMITED);
+  if (g.mine === n) return fail_('SELF_VOTE');
+  if (g.nums.indexOf(n) < 0) return fail_('NOT_IN_GALLERY');
+  if (!deps.rateLimit('like:' + sid, LIKE_PER_MINUTE)) return fail_('BUSY', MSG_RATE_LIMITED);
   var at = deps.now();
   if (!deps.tryLock()) return fail_('BUSY');
   try {
-    deps.appendVote({ at: at, id: sid, cls: classNo_(sid), pick: pick });
+    deps.appendLike({ at: at, id: sid, cls: classNo_(sid), n: n, on: req.on });
   } finally {
     deps.releaseLock();
   }
-  return ok_({ savedAt: at.toISOString(), pick: pick });
+  return ok_({ savedAt: at.toISOString(), n: n, on: req.on });
+}
+
+// 순수: 좋아요 기록에서 지금 눌려 있는 것만. (학번, 번호)마다 가장 나중 기록이 Y 인 것 → [{ id, cls, n, at }]
+function currentLikes_(likes) {
+  var last = {};
+  (likes || []).forEach(function (l) {
+    var id = String(l.id).trim(), n = Number(l.n);
+    if (!validateStudentId(id) || !isFinite(n) || n < 1) return;
+    var k = id + '|' + n, t = toMs_(l.at);
+    if (!last[k] || (isFinite(t) && t >= toMs_(last[k].at))) last[k] = { id: id, cls: classNo_(id), n: n, at: l.at, on: !!l.on };
+  });
+  return Object.keys(last).map(function (k) { return last[k]; }).filter(function (x) { return x.on; });
+}
+
+function likedBy_(cur, sid) {
+  return cur.filter(function (x) { return x.id === sid; }).map(function (x) { return x.n; }).sort(function (a, b) { return a - b; });
 }
 
 // 내 제출 현황: 글 구간별 마지막 저장 시각, 마지막 투표, 투표 열림 여부 (글 내용은 돌려주지 않음)
@@ -613,14 +631,9 @@ function doStatus_(deps, cfg, sid) {
     var t = toMs_(r.at);
     if (isFinite(t) && (!notes[r.section] || t > toMs_(notes[r.section]))) notes[r.section] = new Date(t).toISOString();
   });
-  var vote = null;
-  (deps.readVotes() || []).forEach(function (r) {
-    if (String(r.id).trim() !== sid) return;
-    var t = toMs_(r.at);
-    if (isFinite(t) && (!vote || t > toMs_(vote.at))) vote = { at: new Date(t).toISOString(), pick: r.pick };
-  });
+  var likes = likedBy_(currentLikes_(deps.readLikes()), sid);
   var g = galleryFor_(deps.readGallery(), sid);
-  return ok_({ notes: notes, vote: vote, voteOpen: !!cfg.vote_open, sessionOpen: !!cfg.session_open,
+  return ok_({ notes: notes, likes: likes, voteOpen: !!cfg.vote_open, sessionOpen: !!cfg.session_open,
     galleryReady: g.nums.length > 0, myNumber: g.mine });
 }
 
@@ -853,34 +866,19 @@ function classLabel_(key) {
   return Number(key.charAt(0)) + '학년 ' + Number(key.slice(1)) + '반';
 }
 
-// 순수: 투표자마다 가장 나중 한 번
-function latestVotes_(votes) {
-  var latest = {};
-  (votes || []).forEach(function (v) {
-    var id = String(v.id).trim();
-    var t = toMs_(v.at);
-    if (!validateStudentId(id) || !isFinite(Number(v.pick)) || !Number(v.pick)) return;
-    if (!latest[id] || (isFinite(t) && t >= toMs_(latest[id].at))) latest[id] = v;
-  });
-  return latest;
-}
-
-// 순수: 투표 집계. 반(반 번호)마다 투표한 학생 수와 많이 받은 작품 번호 순
-function adminTally(votes) {
-  var latest = latestVotes_(votes);
+// 순수: 좋아요 순위. 반(반 번호)마다 좋아요를 누른 학생 수와 작품 번호별 받은 좋아요 수(많은 순)
+function adminTally(likes) {
   var byClass = {};
-  Object.keys(latest).forEach(function (id) {
-    var c = classNo_(id);
-    var x = byClass[c] || (byClass[c] = { voters: 0, m: {} });
-    x.voters++;
-    var n = Number(latest[id].pick);
-    x.m[n] = (x.m[n] || 0) + 1;
+  currentLikes_(likes).forEach(function (x) {
+    var c = byClass[x.cls] || (byClass[x.cls] = { voters: {}, m: {} });
+    c.voters[x.id] = true;
+    c.m[x.n] = (c.m[x.n] || 0) + 1;
   });
   return Object.keys(byClass).map(Number).sort(function (a, b) { return a - b; }).map(function (c) {
     var x = byClass[c];
     var top = Object.keys(x.m).map(function (n) { return { n: Number(n), count: x.m[n] }; })
       .sort(function (a, b) { return b.count - a.count || a.n - b.n; });
-    return { key: String(c), label: c + '반', voters: x.voters, top: top };
+    return { key: String(c), label: c + '반', voters: Object.keys(x.voters).length, top: top };
   });
 }
 
@@ -943,13 +941,12 @@ function adminStudentNotes(notes, sid) {
   });
 }
 
-// 순수: 투표 내려받기 CSV (투표자마다 가장 나중 한 번)
-function adminVotesCsv(votes) {
-  var latest = latestVotes_(votes);
-  var ids = Object.keys(latest).sort();
+// 순수: 좋아요 내려받기 CSV. 지금 눌려 있는 좋아요 하나가 한 줄 (학번, 반, 번호)
+function adminVotesCsv(likes) {
+  var cur = currentLikes_(likes).sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : a.n - b.n; });
   var lines = [['학번', '반', '번호'].map(csvCell_).join(',')];
-  ids.forEach(function (id) { lines.push([id, classNo_(id), latest[id].pick].map(csvCell_).join(',')); });
-  return { csv: '\uFEFF' + lines.join('\r\n') + '\r\n', count: ids.length };
+  cur.forEach(function (x) { lines.push([x.id, x.cls, x.n].map(csvCell_).join(',')); });
+  return { csv: '﻿' + lines.join('\r\n') + '\r\n', count: cur.length };
 }
 
 // 순수: 관리자가 붙여넣은 작품 번호 명단 읽기. private/mapping.csv 그대로(머리글로 학번·반·번호·공개 열을 찾음)
@@ -1015,8 +1012,8 @@ function adminPasswordCheck(deps, pw) {
 }
 
 // 순수: 관리자 목록 행 만들기. query 는 학번 일부 또는 이름 일부(공백 무시)
-// 행마다 제출 여부: t1·t2·t3(글 마지막 시각), count·lastAt(게임), voteAt·pick(투표)
-function adminRows(accounts, submissions, query, lockedIds, notesMeta, votes) {
+// 행마다 제출 여부: t1·t2·t3(글 마지막 시각), count·lastAt(게임), likeCount·likeAt(누른 좋아요 수·마지막 시각)
+function adminRows(accounts, submissions, query, lockedIds, notesMeta, likes) {
   var q = String(query === null || query === undefined ? '' : query).replace(/\s+/g, '').toLowerCase();
   var locked = {};
   (lockedIds || []).forEach(function (id) { locked[String(id)] = true; });
@@ -1036,7 +1033,13 @@ function adminRows(accounts, submissions, query, lockedIds, notesMeta, votes) {
     var cur = note[id] || (note[id] = {});
     if (isFinite(t) && (!cur[n.section] || t > cur[n.section])) cur[n.section] = t;
   });
-  var lv = latestVotes_(votes);
+  var lk = {};
+  currentLikes_(likes).forEach(function (x) {
+    var c = lk[x.id] || (lk[x.id] = { count: 0, last: NaN });
+    c.count++;
+    var t = toMs_(x.at);
+    if (isFinite(t) && (!isFinite(c.last) || t > c.last)) c.last = t;
+  });
   var iso = function (t) { return t && isFinite(t) ? new Date(t).toISOString() : ''; };
   var rows = (accounts || []).filter(function (a) {
     if (!q) return true;
@@ -1045,11 +1048,11 @@ function adminRows(accounts, submissions, query, lockedIds, notesMeta, votes) {
     var id = String(a.id);
     var s = stat[id] || { count: 0, last: NaN };
     var nt = note[id] || {};
-    var v = lv[id];
+    var l = lk[id] || { count: 0, last: NaN };
     return { id: id, name: String(a.name), registeredAt: toIsoOrEmpty_(a.at), reset: !!a.reset,
       locked: !!locked[id], count: s.count, lastAt: iso(s.last),
       t1: iso(nt.t1), t2: iso(nt.t2), t3: iso(nt.t3),
-      voteAt: v ? toIsoOrEmpty_(v.at) : '', pick: v ? Number(v.pick) : null };
+      likeCount: l.count, likeAt: iso(l.last) };
   });
   rows.sort(function (x, y) { return x.id < y.id ? -1 : x.id > y.id ? 1 : 0; });
   return { total: (accounts || []).length, shown: Math.min(rows.length, ADMIN_LIST_MAX), rows: rows.slice(0, ADMIN_LIST_MAX) };
@@ -1065,7 +1068,7 @@ function adminHandle(deps, action, arg) {
   if (action === 'list') {
     var accounts = deps.readAccounts() || [];
     var locked = deps.lockedIds(accounts.map(function (a) { return a.id; })) || [];
-    return ok_(adminRows(accounts, deps.readSubmissions(), arg, locked, deps.readNotesMeta(), deps.readVotes()));
+    return ok_(adminRows(accounts, deps.readSubmissions(), arg, locked, deps.readNotesMeta(), deps.readLikes()));
   }
   if (action === 'classes') {
     var latestAll = adminLatest(deps.readSubmissions(), '');
@@ -1074,7 +1077,7 @@ function adminHandle(deps, action, arg) {
     return ok_({ classes: Object.keys(by).sort().map(function (k) { return { key: k, label: Number(k[0]) + '학년 ' + Number(k.slice(1)) + '반', count: by[k] }; }) });
   }
   if (action === 'tally') {
-    return ok_({ voteOpen: !!deps.voteOpen(), classes: adminTally(deps.readVotes()) });
+    return ok_({ voteOpen: !!deps.voteOpen(), classes: adminTally(deps.readLikes()) });
   }
   if (action === 'notes') {
     var nk = String(arg === null || arg === undefined ? '' : arg);
@@ -1090,11 +1093,13 @@ function adminHandle(deps, action, arg) {
     var gs = (deps.readSubmissions() || []).filter(function (x) { return String(x.id).trim() === vid; });
     var glast = NaN, gver = 0;
     gs.forEach(function (x) { var t = toMs_(x.at); if (isFinite(t) && (!isFinite(glast) || t > glast)) glast = t; if (Number(x.version) > gver) gver = Number(x.version); });
-    var mv = latestVotes_(deps.readVotes())[vid];
+    var curL = currentLikes_(deps.readLikes());
+    var myNo = galleryFor_(deps.readGallery(), vid).mine;
     return ok_({ studentId: vid, name: vacc ? String(vacc.name) : '', sections: adminStudentNotes(deps.readNotes() || [], vid),
       game: { count: gs.length, lastAt: isFinite(glast) ? new Date(glast).toISOString() : '', version: gver || null },
-      vote: mv ? { pick: Number(mv.pick), at: toIsoOrEmpty_(mv.at) } : null,
-      myNumber: galleryFor_(deps.readGallery(), vid).mine });
+      liked: likedBy_(curL, vid),
+      received: myNo ? curL.filter(function (x) { return x.cls === classNo_(vid) && x.n === myNo; }).length : null,
+      myNumber: myNo });
   }
   if (action === 'gallery_info') {
     var gi = galleryInfo_(deps.readGallery());
@@ -1114,9 +1119,9 @@ function adminHandle(deps, action, arg) {
     return ok_({ count: g2.count, classes: g2.classes, skipped: parsed.skipped });
   }
   if (action === 'votes') {
-    var vc = adminVotesCsv(deps.readVotes() || []);
+    var vc = adminVotesCsv(deps.readLikes() || []);
     if (!vc.count) return fail_('NOT_FOUND');
-    return ok_({ name: 'votes.csv', count: vc.count, csv: vc.csv });
+    return ok_({ name: 'likes.csv', count: vc.count, csv: vc.csv });
   }
   if (action === 'zip') {
     var key = String(arg === null || arg === undefined ? '' : arg);
@@ -1271,17 +1276,17 @@ var ADMIN_HTML = [
 '<div id="app" hidden>',
 '<div class="bar"><label for="q">찾기</label><input id="q" type="search" placeholder="학번이나 이름 일부 (비우면 전체)" autocomplete="off"><button class="p" id="go">조회</button></div>',
 '<div id="msg" role="status" aria-live="polite"></div>',
-'<div class="wrap"><table><thead><tr><th>학번</th><th>이름</th><th>1차시 기획서</th><th>게임</th><th>2~3차시 기록</th><th>투표</th><th>4차시 소감</th><th>상태</th><th></th></tr></thead><tbody id="tb"><tr><td colspan="9" class="empty">불러오는 중…</td></tr></tbody></table></div>',
-'<p class="sub" style="margin-top:6px">✓ 옆은 마지막으로 낸 시각입니다. 게임은 낸 횟수, 투표는 고른 작품 번호가 함께 보입니다.</p>',
+'<div class="wrap"><table><thead><tr><th>학번</th><th>이름</th><th>1차시 기획서</th><th>게임</th><th>2~3차시 기록</th><th>좋아요</th><th>4차시 소감</th><th>상태</th><th></th></tr></thead><tbody id="tb"><tr><td colspan="9" class="empty">불러오는 중…</td></tr></tbody></table></div>',
+'<p class="sub" style="margin-top:6px">✓ 옆은 마지막으로 낸 시각입니다. 게임은 낸 횟수, 좋아요는 누른 개수가 함께 보입니다.</p>',
 '',
-'<h2 class="sec">내려받기와 투표</h2>',
+'<h2 class="sec">내려받기와 좋아요</h2>',
 '<div class="bar"><label for="cls">갤러리용 작품</label><select id="cls" aria-label="반 선택"></select><button class="p" id="dl">이 반 내려받기</button><button id="dlall">모든 반 차례로 내려받기</button></div>',
 '<p class="sub" style="margin-top:-4px">학생마다 가장 최근에 낸 작품만 담긴 zip입니다. 풀지 말고 <code>python tools/ingest.py 내려받은.zip</code>에 넣습니다.</p>',
-'<div class="bar"><label for="ncls">글·투표</label><select id="ncls" aria-label="글 내려받기 범위"></select><button class="p" id="nbtn">글 내려받기 (CSV)</button><button id="tbtn">투표 집계 보기</button><button id="vbtn">투표 내려받기 (CSV)</button></div>',
+'<div class="bar"><label for="ncls">글·좋아요</label><select id="ncls" aria-label="글 내려받기 범위"></select><button class="p" id="nbtn">글 내려받기 (CSV)</button><button id="tbtn">좋아요 순위 보기</button><button id="vbtn">좋아요 내려받기 (CSV)</button></div>',
 '<p class="sub" style="margin-top:-4px">글 CSV는 학생 한 명이 한 줄이고, 1차시·2~3차시·4차시 글이 옆으로 나란히 들어갑니다(각각 가장 나중 것).</p>',
 '<div id="tally"></div>',
 '<div class="bar"><label for="gtxt">작품 번호 명단</label><span id="ginfo" class="sub" style="margin:0"></span><textarea id="gtxt" spellcheck="false" placeholder="갤러리를 공개한 뒤 private/mapping.csv 내용을 그대로 붙여넣으세요 (학번, 반, 번호 열이 있으면 됩니다)"></textarea><button class="p" id="gbtn">명단 올리기</button></div>',
-'<p class="sub" style="margin-top:-4px">이 명단이 있어야 학생이 투표할 수 있습니다. 서버는 학번·반·번호만 저장하고, 학생이 <b>자기 작품 번호</b>나 <b>우리 반에 없는 번호</b>를 고르면 막습니다. 공개(Y)가 아닌 줄은 빠집니다.</p>',
+'<p class="sub" style="margin-top:-4px">이 명단이 있어야 학생이 좋아요를 누를 수 있습니다. 서버는 학번·반·번호만 저장하고, <b>자기 작품</b>과 <b>다른 반 작품</b>의 좋아요는 막습니다. 공개(Y)가 아닌 줄은 빠집니다.</p>',
 '</div>',
 '</main>',
 '<div class="ov" id="nov" role="dialog" aria-modal="true" aria-labelledby="nvt"><div class="pm"><div class="hd"><div><h2 id="nvt">학생 제출 내용</h2><p class="sub" id="nvs" style="margin:0"></p></div><button id="nvx">닫기</button></div><div id="nvb"></div></div></div>',
@@ -1294,12 +1299,12 @@ var ADMIN_HTML = [
 'function render(res){var tb=$("tb");tb.textContent="";if(!res||!res.ok){msg("목록을 불러오지 못했어요.","bad");return}',
 ' if(!res.rows.length){var tr=document.createElement("tr");var c=td("등록한 학생이 없거나 찾는 학생이 없어요.","empty");c.colSpan=9;tr.appendChild(c);tb.appendChild(tr)}',
 ' var k={t1:0,game:0,t2:0,vote:0,t3:0};',
-' res.rows.forEach(function(r){if(r.t1)k.t1++;if(r.count)k.game++;if(r.t2)k.t2++;if(r.voteAt)k.vote++;if(r.t3)k.t3++;',
-'  var tr=document.createElement("tr");tr.appendChild(td(r.id));tr.appendChild(td(r.name));tr.appendChild(mark(r.t1));tr.appendChild(mark(r.count?r.lastAt:"",r.count?r.count+"번":""));tr.appendChild(mark(r.t2));tr.appendChild(mark(r.voteAt,r.pick?r.pick+"번":""));tr.appendChild(mark(r.t3));',
+' res.rows.forEach(function(r){if(r.t1)k.t1++;if(r.count)k.game++;if(r.t2)k.t2++;if(r.likeCount)k.vote++;if(r.t3)k.t3++;',
+'  var tr=document.createElement("tr");tr.appendChild(td(r.id));tr.appendChild(td(r.name));tr.appendChild(mark(r.t1));tr.appendChild(mark(r.count?r.lastAt:"",r.count?r.count+"번":""));tr.appendChild(mark(r.t2));tr.appendChild(mark(r.likeAt,r.likeCount?r.likeCount+"개":""));tr.appendChild(mark(r.t3));',
 '  var st=document.createElement("td");var tags=[];if(r.reset)tags.push(["초기화됨(비밀번호=학번)","r"]);if(r.locked)tags.push(["잠김","l"]);if(!tags.length)tags.push(["정상",""]);tags.forEach(function(t){var s=document.createElement("span");s.className="tag "+t[1];s.textContent=t[0];st.appendChild(s);st.appendChild(document.createTextNode(" "))});tr.appendChild(st);',
 '  var bc=document.createElement("td");var ac=document.createElement("div");ac.className="acts";var v=document.createElement("button");v.textContent="자세히";v.setAttribute("aria-label",r.id+" "+r.name+" 자세히");v.onclick=function(){viewDetail(r,v)};ac.appendChild(v);var b=document.createElement("button");b.textContent="초기화";b.setAttribute("aria-label",r.id+" "+r.name+" 초기화");b.onclick=function(){reset(r,b)};ac.appendChild(b);bc.appendChild(ac);tr.appendChild(bc);tb.appendChild(tr)});',
 ' var info=res.shown<res.total&&!$("q").value.trim()?" (앞에서 "+res.shown+"명만 표시)":"";',
-' msg("등록 "+res.total+"명 중 "+res.rows.length+"명"+info+" · 1차시 "+k.t1+" · 게임 "+k.game+" · 2~3차시 "+k.t2+" · 투표 "+k.vote+" · 4차시 "+k.t3,"")}',
+' msg("등록 "+res.total+"명 중 "+res.rows.length+"명"+info+" · 1차시 "+k.t1+" · 게임 "+k.game+" · 2~3차시 "+k.t2+" · 좋아요 "+k.vote+" · 4차시 "+k.t3,"")}',
 'function load(){msg("불러오는 중…","");$("go").disabled=true;google.script.run.withSuccessHandler(function(r){$("go").disabled=false;render(r)}).withFailureHandler(function(e){$("go").disabled=false;msg("불러오지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminList($("q").value,PW)}',
 'function reset(r,b){if(!confirm(r.id+" "+r.name+" 학생의 비밀번호를 학번("+r.id+")으로 초기화할까요?\\n잠금도 풀리고, 학생은 학번으로 로그인한 뒤 새 비밀번호를 정합니다."))return;b.disabled=true;msg(r.id+" 초기화하는 중…","");',
 ' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){msg(r.id+" "+r.name+": 초기화했어요. 학생은 학번으로 로그인한 뒤 새 비밀번호를 정하면 됩니다.","ok");setTimeout(load,600)}else{b.disabled=false;msg("초기화하지 못했어요: "+(res&&res.message||"오류"),"bad")}})',
@@ -1309,8 +1314,8 @@ var ADMIN_HTML = [
 'function showDetail(res){var box=$("nvb");box.textContent="";$("nvt").textContent=res.studentId+" "+(res.name||"");$("nvs").textContent="글은 구간마다 가장 나중에 낸 것이에요.";',
 ' var dl=document.createElement("dl");dl.className="kv";var g=res.game||{};',
 ' kv(dl,"게임",g.count?("제출 "+g.count+"번 · 마지막 "+fmt(g.lastAt)+(g.version?" (v"+g.version+")":"")):"아직 내지 않음");',
-' kv(dl,"투표",res.vote?(res.vote.pick+"번 작품 · "+fmt(res.vote.at)):"아직 하지 않음");',
-' kv(dl,"내 작품 번호",res.myNumber?(res.myNumber+"번 (이 번호에는 투표 못 함)"):"명단에 없음");box.appendChild(dl);',
+' kv(dl,"누른 좋아요",res.liked&&res.liked.length?(res.liked.join(", ")+"번 ("+res.liked.length+"개)"):"아직 누르지 않음");',
+' kv(dl,"내 작품",res.myNumber?(res.myNumber+"번 · 받은 좋아요 "+res.received+"개"):"명단에 없음");box.appendChild(dl);',
 ' res.sections.forEach(function(s){var d=document.createElement("section");d.className="nt";var h=document.createElement("h3");h.textContent=s.label;var m=document.createElement("span");m.textContent=s.times?("제출 "+s.times+"번 · 마지막 "+fmt(s.at)):"아직 내지 않음";h.appendChild(m);d.appendChild(h);',
 '  if(s.text){var pre=document.createElement("pre");pre.textContent=s.text;d.appendChild(pre)}else{var n=document.createElement("div");n.className="none";n.textContent="제출한 글이 없어요.";d.appendChild(n)}box.appendChild(d)});',
 ' $("nov").classList.add("on");$("nvx").focus()}',
@@ -1325,15 +1330,15 @@ var ADMIN_HTML = [
 'function busyN(on){$("nbtn").disabled=$("tbtn").disabled=$("vbtn").disabled=on}',
 'function dlCsv(fn,arg,label){busyN(true);msg(label+" 만드는 중…","");var h=google.script.run.withSuccessHandler(function(r){busyN(false);if(r&&r.ok){saveText(r.name,r.csv);msg(label+": "+r.count+"줄을 내려받았어요 ("+r.name+")","ok")}else msg(label+" 실패: "+(r&&r.message||"오류"),"bad")}).withFailureHandler(function(e){busyN(false);msg(label+" 실패: "+(e&&e.message||"오류"),"bad")});if(fn==="adminVotes")h.adminVotes(PW);else h.adminNotes(arg,PW)}',
 '$("nbtn").onclick=function(){dlCsv("adminNotes",$("ncls").value,"글")};',
-'$("vbtn").onclick=function(){dlCsv("adminVotes","","투표")};',
-'function renderTally(r){var box=$("tally");box.textContent="";if(!r||!r.ok){msg("투표 집계를 불러오지 못했어요.","bad");return}',
-' var p=document.createElement("p");p.className="sub";p.textContent="투표 "+(r.voteOpen?"받는 중":"닫힘")+" · 반마다 투표한 학생 수와 많이 받은 작품 번호(표 수). 자기 작품 투표는 서버에서 막혀 있어요.";box.appendChild(p);',
-' if(!r.classes.length){var e=document.createElement("p");e.className="empty";e.textContent="아직 투표가 없어요.";box.appendChild(e);return}',
-' var w=document.createElement("div");w.className="wrap";w.style.marginBottom="12px";var t=document.createElement("table");var hr=document.createElement("tr");["반","투표한 학생","1위","2위","3위","4위","5위"].forEach(function(h){var th=document.createElement("th");th.textContent=h;hr.appendChild(th)});t.appendChild(hr);',
-' r.classes.forEach(function(c){var tr=document.createElement("tr");tr.appendChild(td(c.label));tr.appendChild(td(String(c.voters),"n"));for(var i=0;i<5;i++){var x=c.top[i];tr.appendChild(td(x?(x.n+"번 ("+x.count+"표)"):"-"))}t.appendChild(tr)});',
+'$("vbtn").onclick=function(){dlCsv("adminVotes","","좋아요")};',
+'function renderTally(r){var box=$("tally");box.textContent="";if(!r||!r.ok){msg("좋아요 순위를 불러오지 못했어요.","bad");return}',
+' var p=document.createElement("p");p.className="sub";p.textContent="좋아요 "+(r.voteOpen?"받는 중":"닫힘")+" · 반마다 좋아요를 누른 학생 수와 좋아요를 많이 받은 작품 순위. 자기 작품에는 누를 수 없어요.";box.appendChild(p);',
+' if(!r.classes.length){var e=document.createElement("p");e.className="empty";e.textContent="아직 좋아요가 없어요.";box.appendChild(e);return}',
+' var w=document.createElement("div");w.className="wrap";w.style.marginBottom="12px";var t=document.createElement("table");var hr=document.createElement("tr");["반","누른 학생","1위","2위","3위","4위","5위"].forEach(function(h){var th=document.createElement("th");th.textContent=h;hr.appendChild(th)});t.appendChild(hr);',
+' r.classes.forEach(function(c){var tr=document.createElement("tr");tr.appendChild(td(c.label));tr.appendChild(td(String(c.voters),"n"));for(var i=0;i<5;i++){var x=c.top[i];tr.appendChild(td(x?(x.n+"번 ("+x.count+"개)"):"-"))}t.appendChild(tr)});',
 ' w.appendChild(t);box.appendChild(w)}',
-'$("tbtn").onclick=function(){busyN(true);msg("투표 집계 중…","");google.script.run.withSuccessHandler(function(r){busyN(false);renderTally(r);msg("","")}).withFailureHandler(function(e){busyN(false);msg("투표 집계 실패: "+(e&&e.message||"오류"),"bad")}).adminTallyView(PW)};',
-'function showGalleryInfo(r){$("ginfo").textContent=r&&r.ok&&r.count?("지금 명단: "+r.count+"명 · "+r.classes.join(", ")):"아직 명단이 없어요. 명단이 없으면 학생이 투표할 수 없어요."}',
+'$("tbtn").onclick=function(){busyN(true);msg("좋아요 세는 중…","");google.script.run.withSuccessHandler(function(r){busyN(false);renderTally(r);msg("","")}).withFailureHandler(function(e){busyN(false);msg("좋아요 순위 실패: "+(e&&e.message||"오류"),"bad")}).adminTallyView(PW)};',
+'function showGalleryInfo(r){$("ginfo").textContent=r&&r.ok&&r.count?("지금 명단: "+r.count+"명 · "+r.classes.join(", ")):"아직 명단이 없어요. 명단이 없으면 학생이 좋아요를 누를 수 없어요."}',
 'function loadGalleryInfo(){google.script.run.withSuccessHandler(showGalleryInfo).withFailureHandler(function(){}).adminGalleryInfo(PW)}',
 '$("gbtn").onclick=function(){var t=$("gtxt").value;if(!t.trim()){msg("명단 칸이 비어 있어요.","bad");return}if(!confirm("작품 번호 명단을 새로 올립니다. 지금 있는 명단은 바뀝니다. 계속할까요?"))return;$("gbtn").disabled=true;msg("명단 올리는 중…","");',
 ' google.script.run.withSuccessHandler(function(r){$("gbtn").disabled=false;if(r&&r.ok){msg("명단 "+r.count+"명을 올렸어요"+(r.skipped?(" (빠진 줄 "+r.skipped+"개)"):"")+".","ok");$("gtxt").value="";showGalleryInfo(r)}else msg("명단을 올리지 못했어요: "+(r&&r.message||"오류"),"bad")})',
@@ -1410,8 +1415,8 @@ function makeRealDeps() {
     appendNote: function (n) {
       appendRow_('Notes', [n.at, n.id, n.section, textCell_(n.text)]);
     },
-    appendVote: function (v) {
-      appendRow_('Votes', [v.at, v.id, v.cls, v.pick]);
+    appendLike: function (l) {
+      appendRow_('Likes', [l.at, l.id, l.cls, l.n, l.on ? 'Y' : 'N']);
     },
     // 글 내용(4열)은 읽지 않는 가벼운 읽기: 내 현황 확인용
     readNotesMeta: function () {
@@ -1426,10 +1431,10 @@ function makeRealDeps() {
         return { at: r[0], id: String(r[1]).trim(), section: String(r[2]).trim(), text: String(r[3]) };
       });
     },
-    readVotes: function () {
-      return dataRows_('Votes').map(function (r) {
-        return { at: r[0], id: String(r[1]).trim(), cls: Number(r[2]), pick: Number(r[3]) };
-      }).filter(function (v) { return v.id; });
+    readLikes: function () {
+      return dataRows_('Likes').map(function (r) {
+        return { at: r[0], id: String(r[1]).trim(), cls: Number(r[2]), n: Number(r[3]), on: String(r[4]).trim().toUpperCase() === 'Y' };
+      }).filter(function (l) { return l.id; });
     },
     readGallery: function () {
       return dataRows_('Gallery').map(function (r) {
