@@ -914,6 +914,25 @@ function adminNotesCsv(accounts, notes, classKey) {
   return { csv: '\uFEFF' + lines.join('\r\n') + '\r\n', count: keys.length };
 }
 
+var NOTE_LABELS = { t1: '1차시 기획서', t2: '2~3차시 제작 기록', t3: '4차시 소감' };
+
+// 순수: 관리자 "글 보기". 한 학생의 구간별 가장 나중 글과 제출 횟수. 없는 구간도 빈 칸으로 돌려줌
+function adminStudentNotes(notes, sid) {
+  var by = {};
+  (notes || []).forEach(function (n) {
+    if (String(n.id).trim() !== sid || NOTE_SECTIONS.indexOf(n.section) < 0) return;
+    var cur = by[n.section] || (by[n.section] = { last: null, times: 0 });
+    cur.times++;
+    var t = toMs_(n.at);
+    if (!cur.last || (isFinite(t) && t >= toMs_(cur.last.at))) cur.last = n;
+  });
+  return NOTE_SECTIONS.map(function (sec) {
+    var c = by[sec];
+    return { section: sec, label: NOTE_LABELS[sec], times: c ? c.times : 0,
+      at: c ? toIsoOrEmpty_(c.last.at) : '', text: c ? String(c.last.text) : '' };
+  });
+}
+
 // 순수: 투표 내려받기 CSV (투표자마다 가장 나중 한 번). tools/tally.py 가 자기 작품 표를 빼고 세는 데 씀
 function adminVotesCsv(votes) {
   var latest = {};
@@ -1012,6 +1031,12 @@ function adminHandle(deps, action, arg) {
     if (!nc.count) return fail_('NOT_FOUND');
     return ok_({ name: 'notes_' + (nk || 'all') + '.csv', count: nc.count, csv: nc.csv });
   }
+  if (action === 'note_view') {
+    var vid = String(arg === null || arg === undefined ? '' : arg).trim();
+    if (!validateStudentId(vid)) return fail_('BAD_REQUEST');
+    var vacc = findAccount_(deps.readAccounts() || [], vid);
+    return ok_({ studentId: vid, name: vacc ? String(vacc.name) : '', sections: adminStudentNotes(deps.readNotes() || [], vid) });
+  }
   if (action === 'votes') {
     var vc = adminVotesCsv(deps.readVotes() || []);
     if (!vc.count) return fail_('NOT_FOUND');
@@ -1101,6 +1126,11 @@ function adminNotes(classKey, pw) {
   return adminHandle(makeRealDeps(), 'notes', classKey);
 }
 
+function adminNoteView(studentId, pw) {
+  adminCheck_(pw);
+  return adminHandle(makeRealDeps(), 'note_view', studentId);
+}
+
 function adminVotes(pw) {
   adminCheck_(pw);
   return adminHandle(makeRealDeps(), 'votes', '');
@@ -1135,6 +1165,12 @@ var ADMIN_HTML = [
 'table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:9px 10px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}th{color:var(--mut);font-weight:600;background:var(--pri2)}',
 'td.n{text-align:right}.tag{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--bd)}.tag.r{color:var(--warn);border-color:var(--warn)}.tag.l{color:var(--bad);border-color:var(--bad)}',
 '.empty{padding:24px;text-align:center;color:var(--mut)}[hidden]{display:none!important}',
+'td .acts{display:flex;gap:6px;justify-content:flex-end}',
+'.ov{position:fixed;inset:0;background:rgba(15,20,30,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:10}.ov.on{display:flex}',
+'.pm{background:var(--card);color:var(--tx);width:min(820px,100%);max-height:92vh;overflow:auto;border-radius:12px;padding:20px 22px;box-shadow:0 10px 30px rgba(0,0,0,.25)}',
+'.pm h2{margin:0 0 2px;font-size:19px}.pm .hd{display:flex;align-items:flex-start;gap:12px;margin-bottom:10px}.pm .hd div{flex:1}',
+'.nt{border:1px solid var(--bd);border-radius:10px;margin:12px 0;overflow:hidden}.nt h3{margin:0;padding:9px 12px;background:var(--pri2);font-size:15px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}',
+'.nt h3 span{font-size:13px;font-weight:400;color:var(--mut)}.nt pre{margin:0;padding:12px;white-space:pre-wrap;word-break:break-word;font:inherit;font-size:14px;line-height:1.6;max-height:46vh;overflow:auto}.nt .none{padding:12px;color:var(--mut);font-size:14px}',
 'select{padding:8px 10px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit;font-size:15px;min-height:36px}',
 '</style></head><body><main>',
 '<h1>제출 시험 관리자</h1>',
@@ -1151,7 +1187,9 @@ var ADMIN_HTML = [
 '<div id="msg" role="status" aria-live="polite"></div>',
 '<div class="wrap"><table><thead><tr><th>학번</th><th>이름</th><th>등록</th><th>제출</th><th>최근 제출</th><th>상태</th><th></th></tr></thead><tbody id="tb"><tr><td colspan="7" class="empty">불러오는 중…</td></tr></tbody></table></div>',
 '</div>',
-'</main><script>',
+'</main>',
+'<div class="ov" id="nov" role="dialog" aria-modal="true" aria-labelledby="nvt"><div class="pm"><div class="hd"><div><h2 id="nvt">학생 글</h2><p class="sub" id="nvs" style="margin:0"></p></div><button id="nvx">닫기</button></div><div id="nvb"></div></div></div>',
+'<script>',
 'var $=function(id){return document.getElementById(id)};var PW="";var CLS=[];',
 'function fmt(iso){if(!iso)return "-";var d=new Date(iso);if(isNaN(d))return "-";var p=function(n){return (n<10?"0":"")+n};return (d.getMonth()+1)+"/"+d.getDate()+" "+p(d.getHours())+":"+p(d.getMinutes())}',
 'function msg(t,cls){var m=$("msg");m.textContent=t;m.className=cls||""}',
@@ -1160,12 +1198,20 @@ var ADMIN_HTML = [
 ' if(!res.rows.length){var tr=document.createElement("tr");var c=td("등록한 학생이 없거나 찾는 학생이 없어요.","empty");c.colSpan=7;tr.appendChild(c);tb.appendChild(tr)}',
 ' res.rows.forEach(function(r){var tr=document.createElement("tr");tr.appendChild(td(r.id));tr.appendChild(td(r.name));tr.appendChild(td(fmt(r.registeredAt)));tr.appendChild(td(String(r.count),"n"));tr.appendChild(td(fmt(r.lastAt)));',
 '  var st=document.createElement("td");var tags=[];if(r.reset)tags.push(["초기화됨(비밀번호=학번)","r"]);if(r.locked)tags.push(["잠김","l"]);if(!tags.length)tags.push(["정상",""]);tags.forEach(function(t){var s=document.createElement("span");s.className="tag "+t[1];s.textContent=t[0];st.appendChild(s);st.appendChild(document.createTextNode(" "))});tr.appendChild(st);',
-'  var bc=document.createElement("td");var b=document.createElement("button");b.textContent="초기화";b.setAttribute("aria-label",r.id+" "+r.name+" 초기화");b.onclick=function(){reset(r,b)};bc.appendChild(b);tr.appendChild(bc);tb.appendChild(tr)});',
+'  var bc=document.createElement("td");var ac=document.createElement("div");ac.className="acts";var v=document.createElement("button");v.textContent="글 보기";v.setAttribute("aria-label",r.id+" "+r.name+" 글 보기");v.onclick=function(){viewNotes(r,v)};ac.appendChild(v);var b=document.createElement("button");b.textContent="초기화";b.setAttribute("aria-label",r.id+" "+r.name+" 초기화");b.onclick=function(){reset(r,b)};ac.appendChild(b);bc.appendChild(ac);tr.appendChild(bc);tb.appendChild(tr)});',
 ' var info=res.shown<res.total&&!$("q").value.trim()?" (앞에서 "+res.shown+"명만 표시)":"";msg("등록 "+res.total+"명 중 "+res.rows.length+"명"+info,"")}',
 'function load(){msg("불러오는 중…","");$("go").disabled=true;google.script.run.withSuccessHandler(function(r){$("go").disabled=false;render(r)}).withFailureHandler(function(e){$("go").disabled=false;msg("불러오지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminList($("q").value,PW)}',
 'function reset(r,b){if(!confirm(r.id+" "+r.name+" 학생의 비밀번호를 학번("+r.id+")으로 초기화할까요?\\n잠금도 풀리고, 지금 로그인된 화면은 끊깁니다."))return;b.disabled=true;msg(r.id+" 초기화하는 중…","");',
 ' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){msg(r.id+" "+r.name+": 초기화했어요. 학생은 학번으로 로그인하면 됩니다.","ok");setTimeout(load,600)}else{b.disabled=false;msg("초기화하지 못했어요: "+(res&&res.message||"오류"),"bad")}})',
 ' .withFailureHandler(function(e){b.disabled=false;msg("초기화하지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminReset(r.id,PW)}',
+'function fmtFull(iso){if(!iso)return "";var d=new Date(iso);if(isNaN(d))return "";var p=function(n){return (n<10?"0":"")+n};return (d.getMonth()+1)+"/"+d.getDate()+" "+p(d.getHours())+":"+p(d.getMinutes())}',
+'var lastFocus=null;function closeNotes(){$("nov").classList.remove("on");if(lastFocus)lastFocus.focus()}',
+'function showNotes(res){var box=$("nvb");box.textContent="";$("nvt").textContent=res.studentId+" "+(res.name||"")+" 학생 글";$("nvs").textContent="구간마다 가장 나중에 낸 글이에요. 고쳐 낸 횟수도 함께 보여요.";',
+' res.sections.forEach(function(s){var d=document.createElement("section");d.className="nt";var h=document.createElement("h3");h.textContent=s.label;var m=document.createElement("span");m.textContent=s.times?("제출 "+s.times+"번 · 마지막 "+fmtFull(s.at)):"아직 내지 않음";h.appendChild(m);d.appendChild(h);',
+'  if(s.text){var pre=document.createElement("pre");pre.textContent=s.text;d.appendChild(pre)}else{var n=document.createElement("div");n.className="none";n.textContent="제출한 글이 없어요.";d.appendChild(n)}box.appendChild(d)});',
+' $("nov").classList.add("on");$("nvx").focus()}',
+'function viewNotes(r,b){b.disabled=true;msg(r.id+" "+r.name+" 글을 불러오는 중…","");lastFocus=b;google.script.run.withSuccessHandler(function(res){b.disabled=false;if(res&&res.ok){msg("","");showNotes(res)}else msg("글을 불러오지 못했어요: "+(res&&res.message||"오류"),"bad")}).withFailureHandler(function(e){b.disabled=false;msg("글을 불러오지 못했어요: "+(e&&e.message||"오류"),"bad")}).adminNoteView(r.id,PW)}',
+'$("nvx").onclick=closeNotes;$("nov").addEventListener("click",function(e){if(e.target===$("nov"))closeNotes()});document.addEventListener("keydown",function(e){if(e.key==="Escape"&&$("nov").classList.contains("on"))closeNotes()});',
 'function saveZip(name,b64){var bin=atob(b64),n=bin.length,u=new Uint8Array(n);for(var i=0;i<n;i++)u[i]=bin.charCodeAt(i);var url=URL.createObjectURL(new Blob([u],{type:"application/zip"}));var a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(function(){URL.revokeObjectURL(url)},60000)}',
 'function loadClasses(){google.script.run.withSuccessHandler(function(r){var sel=$("cls");sel.textContent="";CLS=(r&&r.ok&&r.classes)||[];CLS.forEach(function(c){var o=document.createElement("option");o.value=c.key;o.textContent=c.label+" ("+c.count+"명)";sel.appendChild(o)});if(!CLS.length){var o=document.createElement("option");o.textContent="제출한 반이 없어요";sel.appendChild(o)}$("dl").disabled=$("dlall").disabled=!CLS.length;var ns=$("ncls");ns.textContent="";var a0=document.createElement("option");a0.value="";a0.textContent="모든 반";ns.appendChild(a0);CLS.forEach(function(c){var o=document.createElement("option");o.value=c.key;o.textContent=c.label;ns.appendChild(o)})}).withFailureHandler(function(){}).adminClasses(PW)}',
 'function dlOne(c,next){msg(c.label+" 만드는 중…","");google.script.run.withSuccessHandler(function(r){if(r&&r.ok){saveZip(r.name,r.b64);msg(c.label+": "+r.count+"명 작품을 내려받았어요 ("+r.name+")","ok");if(next)setTimeout(next,1200);else $("dl").disabled=$("dlall").disabled=false}else{msg(c.label+" 실패: "+(r&&r.message||"오류"),"bad");$("dl").disabled=$("dlall").disabled=false}}).withFailureHandler(function(e){msg(c.label+" 실패: "+(e&&e.message||"오류"),"bad");$("dl").disabled=$("dlall").disabled=false}).adminZip(c.key,PW)}',

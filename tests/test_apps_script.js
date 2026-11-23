@@ -939,6 +939,36 @@ test('관리자 투표 집계: 투표자마다 마지막 한 번, 반별·부문
   assert.ok(!v.csv.includes('bad'));
 });
 
+test('관리자 글 보기: 한 학생의 구간별 마지막 글·횟수, 없는 구간은 빈 칸, 잘못된 학번 거부', () => {
+  const T = (m) => new Date(Date.parse('2026-11-20T01:00:00Z') + m * 60000);
+  const notes = [
+    { id: '31001', at: T(1), section: 't1', text: '옛 기획' },
+    { id: '31001', at: T(3), section: 't1', text: '<b>새 기획</b>' },
+    { id: '31001', at: T(2), section: 't3', text: '소감' },
+    { id: '31002', at: T(4), section: 't1', text: '다른 학생' },
+    { id: '31001', at: T(5), section: 'zz', text: '잘못된 구간' }
+  ];
+  const d = { readAccounts: () => [{ id: '31001', name: '김하늘', hash: 'H', salt: 'S' }], readNotes: () => notes };
+  const r = J(G.adminHandle(d, 'note_view', ' 31001 '));
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(r.name, '김하늘');
+  eq(r.sections.map((x) => [x.section, x.times, x.text]), [['t1', 2, '<b>새 기획</b>'], ['t2', 0, ''], ['t3', 1, '소감']]);
+  assert.strictEqual(r.sections[0].label, '1차시 기획서');
+  assert.strictEqual(r.sections[0].at, T(3).toISOString());
+  assert.ok(!JSON.stringify(r).includes('다른 학생') && !JSON.stringify(r).includes('"H"'), '다른 학생 글·해시 없음');
+  assert.strictEqual(J(G.adminHandle(d, 'note_view', '31740')).code, 'BAD_REQUEST');
+  assert.strictEqual(J(G.adminHandle(d, 'note_view', null)).code, 'BAD_REQUEST');
+  const none = J(G.adminHandle(d, 'note_view', '31009'));
+  assert.strictEqual(none.ok, true);
+  assert.strictEqual(none.name, '');
+  assert.ok(none.sections.every((x) => x.times === 0));
+});
+
+test('관리자 화면: 학생 글은 textContent 로만 넣음(innerHTML 없음)', () => {
+  assert.ok(!/innerHTML/.test(G.ADMIN_HTML), 'innerHTML 사용 금지');
+  assert.ok(G.ADMIN_HTML.includes('pre.textContent=s.text'));
+});
+
 test('관리자 글 CSV: 학번·구간마다 가장 나중 글, 반 필터, 수식 방지, 이름 붙임', () => {
   const T = (m) => new Date(Date.parse('2026-11-20T01:00:00Z') + m * 60000);
   const accounts = [{ id: '31001', name: '김하늘' }, { id: '31002', name: '이바다' }, { id: '21005', name: '박구름' }];
@@ -1007,7 +1037,7 @@ test('관리자 화면: 스크립트 문법이 맞고 서버 호출 이름이 �
   const m = /<script>([\s\S]*)<\/script>/.exec(G.ADMIN_HTML);
   assert.ok(m, '스크립트 없음');
   new vm.Script(m[1]); // 문법 오류면 여기서 던짐
-  for (const fn of ['adminInfo', 'adminList', 'adminReset', 'adminClasses', 'adminZip', 'adminNotes', 'adminVotes', 'adminTallyView']) {
+  for (const fn of ['adminInfo', 'adminList', 'adminReset', 'adminClasses', 'adminZip', 'adminNotes', 'adminVotes', 'adminTallyView', 'adminNoteView']) {
     assert.strictEqual(typeof G[fn], 'function', fn);
     assert.ok(G.ADMIN_HTML.includes('.' + fn + '('), '화면이 ' + fn + ' 를 부르지 않음');
   }
