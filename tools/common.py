@@ -28,7 +28,7 @@ REVIEW_FIELDS = ['학번', '이름', '반', '번호', '상태', '사유', '실�
 MAPPING_FIELDS = ['학번', '이름', '반', '번호', '코드', '해시', '공개']
 YES = {'y', 'yes', 'o', 'ㅇ', '1', 'true', '승인', '허용'}
 
-ID_RE = re.compile(r'^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-3]\d|40)$')
+ID_RE = re.compile(r'^([1-3])(0[1-9]|1[0-6])(0[1-9]|[1-9]\d)$')
 MARK_RE = re.compile(r'^﻿?\s*<!--\s*vibe-submit:([^|>]*)\|([^>]*?)\s*-->\s*', re.S)
 URL_RE = re.compile(r'https?://(?!www\.w3\.org/)[^\s"\'<>)]+', re.I)
 REL_RE = re.compile(r'(?:src|href)\s*=\s*["\']//[^"\']+', re.I)
