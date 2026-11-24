@@ -53,7 +53,8 @@ var GOOGLE_ACTIONS = ['whoami', 'bind'];
 var PASSWORD_ACTIONS = ['register', 'login', 'change_password'];
 var SHARED_ACTIONS = ['submit', 'list_mine'];
 // 비밀번호 방식에서 세션으로만 쓰는 동작: 글 제출, 투표, 내 현황
-var SESSION_ACTIONS = ['note', 'like', 'status'];
+var SESSION_ACTIONS = ['note', 'like', 'status', 'pledge'];
+var SIGN_MAX = 80000; // 서명 그림(data URL) 길이 상한. 360x100 PNG 는 보통 수 KB
 var LIKE_PER_MINUTE = 60; // 좋아요는 여러 번 누르므로 제출보다 넉넉하게
 var NOTE_SECTIONS = ['t1', 't2', 't3'];
 var NOTE_MAX = 30000; // 글 한 칸(구글 시트 한 셀은 5만 자까지)
@@ -75,10 +76,11 @@ var SHEETS = {
   Accounts: ['학번', '이름', '비밀번호해시', '솔트', '등록시각', '초기화', '변경시각', '초기화시각'],
   Notes: ['시각', '학번', '구간', '글'],
   Likes: ['시각', '학번', '반', '번호', '좋아요'], // 좋아요 누름(Y)·취소(N) 기록. (학번, 번호)마다 가장 나중 것이 지금 상태
+  Pledges: ['시각', '학번', '이름', '서명'], // 서약 서명. 4열에 서명 그림을 칸 위에 붙임(같은 학생이 다시 서명하면 줄이 추가됨)
   Gallery: ['학번', '반', '번호'] // 갤러리 작품 번호 명단(관리자가 올림). 자기 작품 투표를 막는 데 씀
 };
 // 텍스트 서식 열 (1부터): 학번·파일ID·해시·요청ID (숫자/지수로 바뀌지 않게)
-var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8], Accounts: [1, 3, 4], Notes: [2, 3, 4], Likes: [2], Gallery: [1] };
+var TEXT_COLS = { Roster: [1], Bindings: [1], Submissions: [2, 5, 7, 8], Accounts: [1, 3, 4], Notes: [2, 3, 4], Likes: [2], Pledges: [2], Gallery: [1] };
 
 var CONFIG_DEFAULTS = [
   ['auth_mode', 'password'],   // password | google
@@ -509,6 +511,7 @@ function routePassword_(deps, cfg, req, action) {
     var sidN = String(ss.acc.id).trim();
     if (action === 'note') return doNote_(deps, cfg, req, sidN);
     if (action === 'like') return doLike_(deps, cfg, req, sidN);
+    if (action === 'pledge') return doPledge_(deps, cfg, req, sidN, String(ss.acc.name));
     return doStatus_(deps, cfg, sidN);
   }
   // submit·list_mine 은 세션 우선
@@ -585,6 +588,21 @@ function galleryFor_(gallery, sid) {
     if (String(g.id).trim() === sid) mine = n;
   });
   return { nums: nums, mine: mine };
+}
+
+// 1차시 서약 서명: 서명 그림(PNG data URL)을 시트 Pledges 탭에 붙인다. 학번·이름은 세션에서 정함
+function doPledge_(deps, cfg, req, sid, name) {
+  var sign = req.sign;
+  if (typeof sign !== 'string' || sign.length > SIGN_MAX || !/^data:image\/png;base64,iVBORw0KGgo[A-Za-z0-9+\/]+={0,2}$/.test(sign)) return fail_('BAD_REQUEST');
+  if (!deps.rateLimit('pledge:' + sid, cfg.submit_per_minute)) return fail_('BUSY', MSG_RATE_LIMITED);
+  var at = deps.now();
+  if (!deps.tryLock()) return fail_('BUSY');
+  try {
+    deps.appendPledge({ at: at, id: sid, name: name, png: sign.slice(sign.indexOf(',') + 1) });
+  } finally {
+    deps.releaseLock();
+  }
+  return ok_({ savedAt: at.toISOString() });
 }
 
 // 4차시 좋아요: 우리 반 작품마다 누르거나(on: true) 취소(on: false). 여러 작품에 누를 수 있고 내 작품은 안 됨
@@ -1414,6 +1432,18 @@ function makeRealDeps() {
     },
     appendNote: function (n) {
       appendRow_('Notes', [n.at, n.id, n.section, textCell_(n.text)]);
+    },
+    // 서약 서명: 학번·이름을 쓰고 4열 칸 위에 서명 그림을 붙임(그림은 칸 크기에 맞춤)
+    appendPledge: function (p) {
+      var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Pledges') || ensureSheet_('Pledges');
+      var r = sh.getLastRow() + 1;
+      if (r > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 50);
+      sh.getRange(r, 2).setNumberFormat('@');
+      sh.getRange(r, 1, 1, 3).setValues([[p.at, p.id, textCell_(p.name)]]);
+      sh.setRowHeight(r, 52);
+      if (sh.getColumnWidth(4) < 190) sh.setColumnWidth(4, 190);
+      var img = sh.insertImage(Utilities.newBlob(Utilities.base64Decode(p.png), 'image/png', 'sign_' + p.id + '.png'), 4, r);
+      img.setWidth(180).setHeight(50);
     },
     appendLike: function (l) {
       appendRow_('Likes', [l.at, l.id, l.cls, l.n, l.on ? 'Y' : 'N']);

@@ -223,7 +223,6 @@ h3{scroll-margin-top:84px}
   <div class="row dock">
     <button class="btn p" id="nb_t1" onclick="submitNote('t1','1차시 기획')">제출하기</button>
     <p class="st" id="ns_t1" aria-live="polite"></p>
-    <button class="btn" onclick="copySum('t1','1차시 기획')">요약 복사</button>
   </div>
   </div>
 </section>
@@ -302,7 +301,6 @@ h3{scroll-margin-top:84px}
   <div class="row dock">
     <button class="btn p" id="nb_t2" onclick="submitNote('t2','2~3차시 제작')">기록 제출하기</button>
     <p class="st" id="ns_t2" aria-live="polite"></p>
-    <button class="btn" onclick="copySum('t2','2~3차시 제작')">요약 복사</button>
   </div>
 </section>
 
@@ -326,7 +324,6 @@ h3{scroll-margin-top:84px}
   <div class="row dock">
     <button class="btn p" id="nb_t3" onclick="submitNote('t3','4차시 성찰')">소감 제출하기</button>
     <p class="st" id="ns_t3" aria-live="polite"></p>
-    <button class="btn" onclick="copySum('t3','4차시 성찰')">요약 복사</button>
   </div>
 </section>
 </main>
@@ -609,7 +606,6 @@ async function loadStatus(){
   for(const sec of ['t1','t2','t3']){const at=r.data.notes&&r.data.notes[sec];DONE[sec]=!!at;$('ns_'+sec).textContent=at?'✅ 제출함 ('+fmtT(at)+')':'아직 제출하지 않았어요.'}
   LIKE.liked=new Set(Array.isArray(r.data.likes)?r.data.likes:[]);LIKE.own=r.data.myNumber||null;LIKE.ready=!!r.data.galleryReady;LIKE.open=!!r.data.voteOpen;
   sendLikes()}
-function copySum(sec,name){if(!ready())return;copyRaw(buildSum(sec,name),'복사됨!')}
 
 /* 서명 팝업 */
 let ink=false;
@@ -632,12 +628,20 @@ function clearSig(){cx.clearRect(0,0,cv.width,cv.height);cx.lineWidth=3.5;cx.lin
 })();
 $('sigclear').onclick=clearSig;
 $('pcancel').onclick=closePledge;
-$('pok').onclick=()=>{
+$('pok').onclick=async()=>{
   const err=m=>{$('perr').textContent=m};
   const cs=[...document.querySelectorAll('#pl input')];
   if(!cs.every(c=>c.checked))return err('① 모든 약속에 체크해 주세요.');
   if($('pname').value.trim()!==(S.f.sname||'').trim())return err('② 입력한 이름이 위쪽 이름('+S.f.sname+')과 달라요. 똑같이 입력하세요.');
   if(!ink)return err('③ 서명칸에 서명해 주세요.');
+  if(!A.session){closePledge();openAuth('login','먼저 로그인해 주세요.');return}
+  // 서명 그림은 선생님 시트에만 보낸다(이 브라우저에는 저장하지 않음). 작게 줄인 흰 바탕 PNG
+  const sm=document.createElement('canvas');sm.width=360;sm.height=100;const sx=sm.getContext('2d');
+  sx.fillStyle='#fff';sx.fillRect(0,0,sm.width,sm.height);sx.drawImage(cv,0,0,sm.width,sm.height);
+  const sign=sm.toDataURL('image/png');
+  $('pok').disabled=true;err('서명을 보내는 중… (몇 초 걸릴 수 있어요)');
+  const r=await sapi('pledge',{sign});$('pok').disabled=false;
+  if(!r.ok)return err('서명을 보내지 못했어요: '+r.message+' 다시 눌러 주세요.');
   S.f.pledge_done=new Date().toLocaleDateString('ko-KR');S.f.signed_id=S.f.sid;S.f.signed_name=S.f.sname;save();
   closePledge();refresh();toast('서약 완료! 이제 활동을 시작하세요.',2500);
 };
