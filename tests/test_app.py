@@ -24,6 +24,7 @@ class Fake:
         s.fail_submit, s.expire, s.vote_open = None, False, True
         s.my_number = 2  # 가짜 명단: 이 학생 작품은 2번
         s.resets = set()  # 선생님이 초기화한 학번(비밀번호=학번)
+        s.pledges, s.fail_pledge = [], False  # 서약 서명 그림
 
     def handle(s, body):
         a = body.get('action'); s.calls.append(body)
@@ -49,6 +50,9 @@ class Fake:
         if s.expire or not sess.startswith('S'): return bad('SESSION_EXPIRED', '로그인이 만료되었어요.')
         sid = sess[1:6]
         if a == 'note': s.notes.append((sid, body['section'], body['text'])); return o(section=body['section'], savedAt=iso(), length=len(body['text']))
+        if a == 'pledge':
+            if s.fail_pledge: return bad('BUSY', '서버가 바빠요.')
+            s.pledges.append((sid, body['sign'])); return o(savedAt=iso())
         if a == 'like':
             if not s.vote_open: return bad('VOTE_CLOSED', '좋아요가 닫혔어요. 선생님께 물어보세요.')
             if body.get('n') == s.my_number: return bad('SELF_VOTE', '내 작품에는 좋아요를 누를 수 없어요.')
@@ -144,7 +148,12 @@ with sync_playwright() as p:
     for i in range(30): pg.mouse.move(bb['x'] + 40 + i * 15, bb['y'] + 100 + (40 if i % 2 else -40))
     pg.mouse.up()
     pg.screenshot(path=OUT + 'modal_signed.png')
-    pg.click('#pok')
+    fake.fail_pledge = True
+    pg.click('#pok'); pg.wait_for_function('document.getElementById("perr").innerText.includes("보내지 못했어요")')
+    ok('서명 저장 실패하면 서약이 끝나지 않음', is_on(pg, '#pov') and pg.inner_text('#pchip') == '서약 전', pg.inner_text('#perr'))
+    fake.fail_pledge = False
+    pg.click('#pok'); pg.wait_for_selector('#pov:not(.on)', state='attached')
+    ok('서명 그림이 서버로 감(PNG)', len(fake.pledges) == 1 and fake.pledges[0][0] == '20315' and fake.pledges[0][1].startswith('data:image/png;base64,iVBOR'), str(len(fake.pledges)))
     ok('서명 후 팝업 닫힘', not is_on(pg, '#pov'))
     ok('칩 서약 완료', pg.inner_text('#pchip') == '서약 완료')
     ok('본문 잠금 해제', not pg.eval_on_selector('#t1body', 'e=>e.classList.contains("lock")'))
@@ -182,14 +191,12 @@ with sync_playwright() as p:
     ok('복사 시 개발 지침·안전 규칙 자동 복원', '[안전 규칙]' in pg.input_value('#prompt1') and '[Gemini Canvas용 개발 지침]' in pg.input_value('#prompt1'))
     pv2 = pg.input_value('#prompt1'); ok('복원해도 중복 없음', pv2.count('[안전 규칙]') == 1 and pv2.count('[Gemini Canvas용 개발 지침]') == 1)
     pg.click('#nav button[data-t=t1]')
-    # 요약 복사(백업) / 1차시 제출
-    pg.fill('[data-k=title]', '원소 퀴즈'); pg.click("#t1 button:has-text('요약 복사')")
-    pg.wait_for_timeout(300)
-    clip = pg.evaluate('navigator.clipboard.readText()')
-    ok('요약 복사 내용', '[1차시 기획] 20315 김하늘 (2학년 3반 15번)' in clip and '서약서:' in clip and '원소 퀴즈' in clip and '불편할 사람 점검' in clip, clip[:80].replace('\n', ' | '))
+    # 1차시 제출 (요약 복사 버튼은 없음)
+    pg.fill('[data-k=title]', '원소 퀴즈')
+    ok('요약 복사 버튼 없음', pg.locator("button:has-text('요약 복사')").count() == 0)
     pg.click('#nb_t1'); pg.wait_for_function('document.getElementById("ns_t1").innerText.includes("제출했어요")')
     n1 = [n for n in fake.notes if n[1] == 't1']
-    ok('1차시 제출: 서버로 글 전달', len(n1) == 1 and n1[0][0] == '20315' and '서명 완료' in n1[0][2] and '원소 퀴즈' in n1[0][2], n1[0][2][:60] if n1 else '')
+    ok('1차시 제출: 서버로 글 전달(학번·이름·서약 포함)', len(n1) == 1 and n1[0][0] == '20315' and '[1차시 기획] 20315 김하늘 (2학년 3반 15번)' in n1[0][2] and '서명 완료' in n1[0][2] and '원소 퀴즈' in n1[0][2] and '불편할 사람 점검' in n1[0][2], n1[0][2][:60] if n1 else '')
     ok('할 일 목록: 서약·1차시 제출에 체크', pg.eval_on_selector('#t1 .todo li[data-todo=sign]', 'e=>e.classList.contains("done")') and pg.eval_on_selector('#t1 .todo li[data-todo=t1]', 'e=>e.classList.contains("done")'))
     ok('제출 요청에 학번·비밀번호 없이 세션만', all('password' not in c and 'studentId' not in c for c in fake.calls if c['action'] in ('note', 'vote', 'submit', 'status')))
     # 2~3차시

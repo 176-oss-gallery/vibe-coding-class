@@ -300,7 +300,7 @@ function makeDeps(over) {
     accounts: [], fails: {}, pepper: PEPPER, saltSeq: 0, sessions: new Map(), sv: {}, globalFails: 0,
     inLock: false, lockHashes: 0, hashedInLock: false,
     roster: { '10101': '김하늘', '10102': '이바다', '10103': '박구름' },
-    bindings: [], subs: [], notes: [], likes: [], gallery: [], files: new Map(), rateOk: true, discarded: [], logs: [], lockOk: true, locks: 0, releases: 0, seq: 0,
+    bindings: [], subs: [], notes: [], likes: [], pledges: [], gallery: [], files: new Map(), rateOk: true, discarded: [], logs: [], lockOk: true, locks: 0, releases: 0, seq: 0,
     t: Date.parse('2026-11-20T01:00:00Z')
   };
   const deps = {
@@ -339,6 +339,7 @@ function makeDeps(over) {
     readSubmissions: () => st.subs.map((r) => Object.assign({}, r)),
     appendNote: (n) => { st.notes.push(Object.assign({}, n)); },
     appendLike: (l) => { st.likes.push(Object.assign({}, l)); },
+    appendPledge: (pl) => { st.pledges.push(Object.assign({}, pl)); },
     readNotesMeta: () => st.notes.map((n) => ({ at: n.at, id: n.id, section: n.section })),
     readNotes: () => st.notes.map((n) => Object.assign({}, n)),
     readLikes: () => st.likes.map((l) => Object.assign({}, l)),
@@ -888,6 +889,23 @@ test('글 제출(note): 세션 필요, 구간·길이 검사, 다시 내면 추�
   assert.strictEqual(pcall(deps, { action: 'note', session: sess, section: 't2', text: 'a' }).code, 'SESSION_CLOSED');
 });
 
+test('서약 서명(pledge): PNG 그림만 받아 시트에 붙임, 학번·이름은 세션에서, 잘못된 그림·세션 없음 거부', () => {
+  const { deps, st } = pwDeps();
+  st.cfg.roster_required = false;
+  const sess = pwLogin(deps, '31040', '김하늘');
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
+  assert.strictEqual(pcall(deps, { action: 'pledge', sign: png }).code, 'BAD_REQUEST', '세션 없음');
+  for (const bad of [null, 5, '', 'data:image/jpeg;base64,/9j/4AAQ', 'data:image/png;base64,AAAA', 'data:image/svg+xml;base64,PHN2Zz4=',
+    png + '<script>', 'data:image/png;base64,iVBORw0KGgo' + 'A'.repeat(G.SIGN_MAX)]) {
+    assert.strictEqual(pcall(deps, { action: 'pledge', session: sess, sign: bad }).code, 'BAD_REQUEST', String(bad).slice(0, 30));
+  }
+  const r = pcall(deps, { action: 'pledge', session: sess, sign: png, studentId: '10101', name: '남의이름' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  eq([st.pledges.length, st.pledges[0].id, st.pledges[0].name], [1, '31040', '김하늘'], '학번·이름은 세션에서');
+  assert.strictEqual(st.pledges[0].png, png.slice(png.indexOf(',') + 1), 'base64 부분만 넘김');
+  assert.strictEqual(st.locks, st.releases);
+});
+
 test('좋아요(like): 우리 반 작품마다 누르기·취소, 여러 개, 내 작품·다른 반·명단 없음·닫힘은 거부, 현황에 지금 누른 것', () => {
   const { deps, st } = pwDeps();
   st.cfg.roster_required = false;
@@ -918,7 +936,7 @@ test('좋아요(like): 우리 반 작품마다 누르기·취소, 여러 개, �
 test('글·투표·현황은 구글 방식에서는 거부, 현황은 글 내용을 돌려주지 않음', () => {
   const g = makeDeps();
   g.st.cfg.auth_mode = 'google';
-  for (const a of ['note', 'like', 'status']) assert.strictEqual(call(g.deps, { action: a, idToken: A, section: 't1', text: 'a', votes: {} }).code, 'BAD_REQUEST', a);
+  for (const a of ['note', 'like', 'status', 'pledge']) assert.strictEqual(call(g.deps, { action: a, idToken: A, section: 't1', text: 'a', votes: {} }).code, 'BAD_REQUEST', a);
   const { deps, st } = pwDeps();
   st.cfg.roster_required = false;
   const sess = pwLogin(deps, '31040', '김하늘');
