@@ -53,7 +53,7 @@ var GOOGLE_ACTIONS = ['whoami', 'bind'];
 var PASSWORD_ACTIONS = ['register', 'login', 'change_password'];
 var SHARED_ACTIONS = ['submit', 'list_mine'];
 // 비밀번호 방식에서 세션으로만 쓰는 동작: 글 제출, 투표, 내 현황
-var SESSION_ACTIONS = ['note', 'like', 'status', 'pledge'];
+var SESSION_ACTIONS = ['note', 'like', 'status', 'pledge', 'restore'];
 var SIGN_MAX = 80000; // 서명 그림(data URL) 길이 상한. 360x100 PNG 는 보통 수 KB
 var LIKE_PER_MINUTE = 60; // 좋아요는 여러 번 누르므로 제출보다 넉넉하게
 var NOTE_SECTIONS = ['t1', 't2', 't3'];
@@ -512,6 +512,7 @@ function routePassword_(deps, cfg, req, action) {
     if (action === 'note') return doNote_(deps, cfg, req, sidN);
     if (action === 'like') return doLike_(deps, cfg, req, sidN);
     if (action === 'pledge') return doPledge_(deps, cfg, req, sidN, String(ss.acc.name));
+    if (action === 'restore') return doRestore_(deps, sidN);
     return doStatus_(deps, cfg, sidN);
   }
   // submit·list_mine 은 세션 우선
@@ -588,6 +589,26 @@ function galleryFor_(gallery, sid) {
     if (String(g.id).trim() === sid) mine = n;
   });
   return { nums: nums, mine: mine };
+}
+
+// 되살리기: 크롬북 기록이 지워졌을 때(게스트 모드 등) 내가 제출한 글(구간마다 가장 나중 것)과 서약 여부를 돌려줌.
+// 다른 학생 것은 돌려주지 않음. 서약은 Pledges 탭에 서명이 있거나 1차시 글에 "서약서: … 서명 완료"가 있으면 한 것으로 봄
+var PLEDGE_LINE_RE = /^서약서: *(.*?) *서명 완료$/m;
+function doRestore_(deps, sid) {
+  var notes = {}, pledgeDate = '';
+  (deps.readNotes() || []).forEach(function (n) {
+    if (String(n.id).trim() !== sid || NOTE_SECTIONS.indexOf(n.section) < 0) return;
+    var t = toMs_(n.at);
+    if (!notes[n.section] || (isFinite(t) && t >= toMs_(notes[n.section].at))) notes[n.section] = { at: n.at, text: String(n.text) };
+  });
+  var out = {};
+  Object.keys(notes).forEach(function (k) {
+    out[k] = { at: toIsoOrEmpty_(notes[k].at), text: notes[k].text };
+    var m = PLEDGE_LINE_RE.exec(notes[k].text);
+    if (m && !pledgeDate && m[1] && m[1] !== 'undefined') pledgeDate = m[1];
+  });
+  var signed = (deps.readPledgeIds() || []).indexOf(sid) >= 0;
+  return ok_({ notes: out, pledged: signed || !!pledgeDate, pledgeDate: pledgeDate });
 }
 
 // 1차시 서약 서명: 서명 그림(PNG data URL)을 시트 Pledges 탭에 붙인다. 학번·이름은 세션에서 정함
@@ -1444,6 +1465,11 @@ function makeRealDeps() {
       if (sh.getColumnWidth(4) < 190) sh.setColumnWidth(4, 190);
       var img = sh.insertImage(Utilities.newBlob(Utilities.base64Decode(p.png), 'image/png', 'sign_' + p.id + '.png'), 4, r);
       img.setWidth(180).setHeight(50);
+    },
+    readPledgeIds: function () {
+      var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Pledges');
+      if (!sh || sh.getLastRow() < 2) return [];
+      return sh.getRange(2, 2, sh.getLastRow() - 1, 1).getValues().map(function (r) { return String(r[0]).trim(); });
     },
     appendLike: function (l) {
       appendRow_('Likes', [l.at, l.id, l.cls, l.n, l.on ? 'Y' : 'N']);

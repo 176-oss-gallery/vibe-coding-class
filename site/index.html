@@ -170,6 +170,7 @@ h3{scroll-margin-top:84px}
   <button data-t="t2">2~3차시 만들기</button>
   <button data-t="t3">4차시 발표와 좋아요</button>
   <div class="bk">
+    <button class="btn" id="restorebtn" type="button" hidden>제출한 내용 불러오기</button>
     <button class="btn" onclick="saveAll()">백업 저장</button>
     <label class="btn">백업 불러오기<input type="file" accept=".json" hidden onchange="loadAll(this)"></label>
   </div>
@@ -179,7 +180,7 @@ h3{scroll-margin-top:84px}
 <!-- ===== 1차시 ===== -->
 <section class="tab on" id="t1">
   <h2>1차시 · 서약과 기획</h2>
-  <p class="sub">쓴 내용은 저절로 저장돼요. 아래 순서대로 하고, 마지막에 제출하면 끝이에요.</p>
+  <p class="sub">쓴 내용은 이 크롬북에 저장되지만, 게스트 모드로 쓰면 창을 닫을 때 지워져요. <b>중간중간 [제출하기]</b>를 눌러 두면 다음에 로그인할 때 되살아나요.</p>
   <div class="todo" role="navigation" aria-label="이번 시간에 할 일"><b>이번 시간에 할 일</b><ol><li data-todo="sign"><a href="#signbox"><i>!</i>서약서 서명</a></li><li data-todo=""><a href="#s1-1"><i>1</i>아이디어 찾기</a></li><li data-todo=""><a href="#s1-2"><i>2</i>기획서 쓰기</a></li><li data-todo="t1"><a href="#nb_t1"><i>✓</i>제출하기</a></li></ol></div>
 
   <div class="notice warn" id="signbox">
@@ -453,7 +454,7 @@ async function doAuth(){
     if(!confirm('이 컴퓨터에는 '+S.f.sid+' 학생의 기록이 남아 있어요.\n지우고 '+id+' 학생으로 새로 시작할까요?\n(남은 기록은 사라져요)'))return err('로그인을 취소했어요.');
     resetLocal()}
   A.sid=id;A.name=r.data.name;A.session=r.data.session;S.f.sid=id;S.f.sname=A.name;save();$('sid').value=id;$('sname').value=A.name;
-  closeAuth();refresh();loadStatus();toast(A.name+' 님, 로그인했어요.',2000)}
+  closeAuth();refresh();loadStatus();toast(A.name+' 님, 로그인했어요.',2000);autoRestore()}
 $('loginbtn').onclick=()=>openAuth('login');
 $('logoutbtn').onclick=()=>{A.session=null;A.sid=A.name='';refresh();toast('로그아웃했어요.')};
 $('amlogin').onclick=()=>setAuthMode('login');$('amreg').onclick=()=>setAuthMode('register');
@@ -466,7 +467,7 @@ function signed(){return !!(A.session&&S.f.pledge_done&&S.f.signed_id===S.f.sid&
 function refresh(){
   const id=parseId(S.f.sid),info=$('idinfo');
   if(!S.f.sid)info.textContent='로그인하세요';else if(id){info.textContent=id.g+'학년 '+id.c+'반 '+id.n+'번';info.className=''}else{info.textContent='';info.className='err'}
-  $('loginbtn').hidden=!!A.session;$('logoutbtn').hidden=!A.session;
+  $('loginbtn').hidden=!!A.session;$('logoutbtn').hidden=!A.session;$('restorebtn').hidden=!A.session;
   $('signbtn').textContent=A.session?'서약서 서명하기':'로그인하기';
   const ok=signed();
   if($('t3').classList.contains('on'))loadGallery();
@@ -558,6 +559,37 @@ function buildSum(sec,name){
   document.querySelectorAll('#'+sec+' [data-l]').forEach(el=>{out+='■ '+el.dataset.l+'\n'+((el.value||'').trim()||'(미작성)')+'\n\n'});
   if(sec==='t2'){for(const t of ['log','fb']){out+='■ '+(t==='log'?'제작 일지':'피드백 카드')+'\n';S.rows[t].forEach((r,i)=>{out+=(i+1)+') '+DEF[t].map((h,j)=>h+': '+((r[j]||'').trim()||'-')).join(' / ')+'\n'});out+='\n'}}
   return out.trim()+'\n'}
+/* 되살리기: 이 크롬북에 기록이 없으면(게스트 모드로 껐다 켠 경우 등) 서버에 제출해 둔 글로 칸을 다시 채운다 */
+const SEC_NAME={t1:'1차시 기획',t2:'2~3차시 제작',t3:'4차시 성찰'};
+function secEmpty(sec){
+  const els=[...document.querySelectorAll('#'+sec+' [data-l]')];
+  if(els.some(el=>(S.f[el.dataset.k]||'').trim()))return false;
+  if(sec==='t2')return !['log','fb'].some(t=>(S.rows[t]||[]).some(r=>Object.values(r).some(v=>(v||'').trim())));
+  return true}
+// buildSum 으로 만든 글을 거꾸로 읽어 칸에 넣는다
+function applySum(sec,text){
+  const byLabel={};document.querySelectorAll('#'+sec+' [data-l]').forEach(el=>{byLabel[el.dataset.l]=el.dataset.k});
+  const blocks=('\n'+text).split('\n■ ').slice(1);
+  for(const b of blocks){
+    const nl=b.indexOf('\n'),label=(nl<0?b:b.slice(0,nl)).trim(),val=(nl<0?'':b.slice(nl+1)).trim();
+    if(byLabel[label]){S.f[byLabel[label]]=val==='(미작성)'?'':val;continue}
+    const t=label==='제작 일지'?'log':label==='피드백 카드'?'fb':null;if(!t||sec!=='t2')continue;
+    const rows=[];
+    val.split('\n').forEach(line=>{const m=line.match(/^\d+\) ([\s\S]*)$/);if(!m)return;
+      const parts=m[1].split(' / '),r={};
+      DEF[t].forEach((h,j)=>{let v=(parts[j]||'').trim();if(v.indexOf(h+':')===0)v=v.slice(h.length+1).trim();r[j]=v==='-'?'':v});rows.push(r)});
+    if(rows.length)S.rows[t]=rows}}
+function fillInputs(){document.querySelectorAll('[data-k]').forEach(el=>{if(el.id==='sid'||el.id==='sname')return;el.value=S.f[el.dataset.k]!=null?S.f[el.dataset.k]:''});renderRows()}
+async function doRestore(force){
+  const r=await sapi('restore');if(!r.ok){if(force)toast(r.message,3500);return}
+  const d=r.data;let got=[];
+  if(d.pledged&&!signed()){S.f.pledge_done=d.pledgeDate||new Date().toLocaleDateString('ko-KR');S.f.signed_id=S.f.sid;S.f.signed_name=S.f.sname;got.push('서약')}
+  for(const sec of ['t1','t2','t3']){const n=d.notes&&d.notes[sec];if(n&&n.text&&(force||secEmpty(sec))){applySum(sec,n.text);got.push(SEC_NAME[sec])}}
+  save();fillInputs();refresh();renderPlan();
+  if(got.length)toast('제출했던 내용을 불러왔어요: '+got.join(', '),3500);else if(force)toast('불러올 제출 내용이 없어요.',2500)}
+function autoRestore(){if(!signed()||['t1','t2','t3'].every(secEmpty))doRestore(false)}
+$('restorebtn').onclick=()=>{if(!A.session){openAuth('login');return}
+  if(!confirm('서버에 제출했던 글(1·2·4차시)을 불러와 지금 칸을 덮어씁니다. 제출하지 않고 쓴 내용은 사라질 수 있어요. 계속할까요?'))return;doRestore(true)};
 function ready(){
   if(!A.session){toast('먼저 위쪽 [로그인]을 누르세요');openAuth('login');return false}
   if(!signed()){toast('1차시에서 서약서에 서명하세요');return false}
