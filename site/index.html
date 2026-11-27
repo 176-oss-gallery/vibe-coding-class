@@ -576,8 +576,12 @@ function applySum(sec,text){
     const t=label==='제작 일지'?'log':label==='피드백 카드'?'fb':null;if(!t||sec!=='t2')continue;
     const rows=[];
     val.split('\n').forEach(line=>{const m=line.match(/^\d+\) ([\s\S]*)$/);if(!m)return;
-      const parts=m[1].split(' / '),r={};
-      DEF[t].forEach((h,j)=>{let v=(parts[j]||'').trim();if(v.indexOf(h+':')===0)v=v.slice(h.length+1).trim();r[j]=v==='-'?'':v});rows.push(r)});
+      // 머리글 이름으로 나눈다(머리글 "결과 (잘 된 점 / 문제)"나 값 안에 ' / '가 있어도 됨)
+      const row=m[1],r={},hs=DEF[t];let pos=0;
+      hs.forEach((h,j)=>{const st=row.indexOf(h+': ',pos);if(st<0){r[j]='';return}
+        const from=st+h.length+2,nx=j+1<hs.length?row.indexOf(' / '+hs[j+1]+': ',from):-1;
+        const v=(nx<0?row.slice(from):row.slice(from,nx)).trim();r[j]=v==='-'?'':v;pos=nx<0?row.length:nx});
+      rows.push(r)});
     if(rows.length)S.rows[t]=rows}}
 function fillInputs(){document.querySelectorAll('[data-k]').forEach(el=>{if(el.id==='sid'||el.id==='sname')return;el.value=S.f[el.dataset.k]!=null?S.f[el.dataset.k]:''});renderRows()}
 async function doRestore(force){

@@ -249,6 +249,8 @@ with sync_playwright() as p:
     ok('실패 뒤 제출 버튼 다시 켜짐', not pg.is_disabled('#gsub'))
     fake.fail_submit = None
     # 2~3차시 기록 제출
+    cells = pg.locator('#tb_log textarea')
+    cells.nth(0).fill('카드 게임 만들어줘'); cells.nth(1).fill('잘 됨 / 점수 오류'); cells.nth(2).fill('점수 고쳐줘')
     pg.click('#nb_t2'); pg.wait_for_function('document.getElementById("ns_t2").innerText.includes("제출했어요")')
     t2n = [n for n in fake.notes if n[1] == 't2'][0][2]
     ok('2~3차시 기록 제출: 표 포함', '제작 일지' in t2n and '피드백 카드' in t2n and '불편했던 부분' in t2n)
@@ -302,6 +304,10 @@ with sync_playwright() as p:
     ok('되살리기: 서약도 다시 하지 않아도 됨', pg.inner_text('#pchip') == '서약 완료')
     ok('되살리기: 안 쓴 칸은 비어 있음(미작성 글자가 들어가지 않음)', pg.input_value('[data-k=worry]') == '')
     ok('되살리기: 2~3차시 역할 칸', pg.input_value('#f1') == '웹 개발자', pg.input_value('#f1'))
+    pg.click('#nav button[data-t=t2]')
+    lv = [pg.locator('#tb_log textarea').nth(i).input_value() for i in range(3)]
+    ok('되살리기: 제작 일지 칸이 제자리에(머리글·값에 / 가 있어도)', lv == ['카드 게임 만들어줘', '잘 됨 / 점수 오류', '점수 고쳐줘'], str(lv))
+    pg.click('#nav button[data-t=t1]')
     ok('제출한 내용 불러오기 버튼 보임', pg.is_visible('#restorebtn'))
     pg.fill('[data-k=title]', '바꾼 이름')
     pg.once('dialog', lambda dlg: dlg.accept())
