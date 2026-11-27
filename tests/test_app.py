@@ -53,6 +53,13 @@ class Fake:
         if a == 'pledge':
             if s.fail_pledge: return bad('BUSY', '서버가 바빠요.')
             s.pledges.append((sid, body['sign'])); return o(savedAt=iso())
+        if a == 'restore':
+            last = {}
+            for (i, sec, t) in s.notes:
+                if i == sid: last[sec] = t
+            import re as _re
+            m = next((_re.search(r'^서약서: *(.*?) *서명 완료$', t, _re.M) for t in last.values() if _re.search(r'^서약서: *(.*?) *서명 완료$', t, _re.M)), None)
+            return o(notes={k: {'at': iso(), 'text': v} for k, v in last.items()}, pledged=bool(m) or any(p[0] == sid for p in s.pledges), pledgeDate=m.group(1) if m else '')
         if a == 'like':
             if not s.vote_open: return bad('VOTE_CLOSED', '좋아요가 닫혔어요. 선생님께 물어보세요.')
             if body.get('n') == s.my_number: return bad('SELF_VOTE', '내 작품에는 좋아요를 누를 수 없어요.')
@@ -242,6 +249,8 @@ with sync_playwright() as p:
     ok('실패 뒤 제출 버튼 다시 켜짐', not pg.is_disabled('#gsub'))
     fake.fail_submit = None
     # 2~3차시 기록 제출
+    cells = pg.locator('#tb_log textarea')
+    cells.nth(0).fill('카드 게임 만들어줘'); cells.nth(1).fill('잘 됨 / 점수 오류'); cells.nth(2).fill('점수 고쳐줘')
     pg.click('#nb_t2'); pg.wait_for_function('document.getElementById("ns_t2").innerText.includes("제출했어요")')
     t2n = [n for n in fake.notes if n[1] == 't2'][0][2]
     ok('2~3차시 기록 제출: 표 포함', '제작 일지' in t2n and '피드백 카드' in t2n and '불편했던 부분' in t2n)
@@ -287,6 +296,23 @@ with sync_playwright() as p:
     ok('다시 로그인하면 제출 현황 복원', '제출함' in pg.inner_text('#ns_t1'))
     pg.click('#nav button[data-t=t3]'); pg.frame_locator('#galframe').locator('button.like[data-n="4"][aria-pressed="true"]').wait_for()
     ok('좋아요 현황 복원(다시 로그인해도 눌러 둔 것 그대로)', '1개' in pg.inner_text('#likeinfo'), pg.inner_text('#likeinfo'))
+    # 게스트 모드처럼 크롬북 기록이 모두 지워진 뒤 다시 로그인: 제출한 글과 서약이 되살아남
+    pg.evaluate('localStorage.clear()'); pg.reload(); pg.wait_for_selector('#aov.on')
+    ok('기록이 지워지면 학번 칸도 비어 있음', pg.input_value('#aid') == '')
+    auth(pg, '20315', 'blue-River-47x'); pg.wait_for_function('document.querySelector("[data-k=title]").value==="원소 퀴즈"')
+    ok('되살리기: 1차시 기획서 칸이 다시 채워짐', pg.input_value('[data-k=title]') == '원소 퀴즈' and pg.input_value('[data-k=concept]') == '원소 기호' and pg.input_value('[data-k=feat1]') == '카드 짝 맞추기', pg.input_value('[data-k=feat1]'))
+    ok('되살리기: 서약도 다시 하지 않아도 됨', pg.inner_text('#pchip') == '서약 완료')
+    ok('되살리기: 안 쓴 칸은 비어 있음(미작성 글자가 들어가지 않음)', pg.input_value('[data-k=worry]') == '')
+    ok('되살리기: 2~3차시 역할 칸', pg.input_value('#f1') == '웹 개발자', pg.input_value('#f1'))
+    pg.click('#nav button[data-t=t2]')
+    lv = [pg.locator('#tb_log textarea').nth(i).input_value() for i in range(3)]
+    ok('되살리기: 제작 일지 칸이 제자리에(머리글·값에 / 가 있어도)', lv == ['카드 게임 만들어줘', '잘 됨 / 점수 오류', '점수 고쳐줘'], str(lv))
+    pg.click('#nav button[data-t=t1]')
+    ok('제출한 내용 불러오기 버튼 보임', pg.is_visible('#restorebtn'))
+    pg.fill('[data-k=title]', '바꾼 이름')
+    pg.once('dialog', lambda dlg: dlg.accept())
+    pg.click('#restorebtn'); pg.wait_for_function('document.querySelector("[data-k=title]").value==="원소 퀴즈"')
+    ok('불러오기 버튼: 제출한 내용으로 덮어씀', pg.input_value('[data-k=title]') == '원소 퀴즈')
     # 같은 컴퓨터에서 다른 학생이 로그인
     fake.accounts['10107'] = ('이서준', 'green-Forest-9q')
     msgs, answer = [], {'accept': False}

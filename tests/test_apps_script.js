@@ -340,6 +340,7 @@ function makeDeps(over) {
     appendNote: (n) => { st.notes.push(Object.assign({}, n)); },
     appendLike: (l) => { st.likes.push(Object.assign({}, l)); },
     appendPledge: (pl) => { st.pledges.push(Object.assign({}, pl)); },
+    readPledgeIds: () => st.pledges.map((pl) => pl.id),
     readNotesMeta: () => st.notes.map((n) => ({ at: n.at, id: n.id, section: n.section })),
     readNotes: () => st.notes.map((n) => Object.assign({}, n)),
     readLikes: () => st.likes.map((l) => Object.assign({}, l)),
@@ -906,6 +907,32 @@ test('서약 서명(pledge): PNG 그림만 받아 시트에 붙임, 학번·이�
   assert.strictEqual(st.locks, st.releases);
 });
 
+test('되살리기(restore): 내 글만 구간마다 가장 나중 것, 서약은 서명 그림 또는 글의 서명 완료 줄로', () => {
+  const { deps, st } = pwDeps();
+  st.cfg.roster_required = false;
+  const sess = pwLogin(deps, '31040', '김하늘');
+  let r = pcall(deps, { action: 'restore', session: sess });
+  eq([r.ok, r.notes, r.pledged], [true, {}, false], '아무것도 없음');
+  pcall(deps, { action: 'note', session: sess, section: 't1', text: '[1차시 기획] 31040 김하늘\n서약서: 2026. 11. 27. 서명 완료\n\n■ 작품 이름\n옛 이름' });
+  pcall(deps, { action: 'note', session: sess, section: 't1', text: '[1차시 기획] 31040 김하늘\n서약서: 2026. 11. 27. 서명 완료\n\n■ 작품 이름\n새 이름' });
+  pcall(deps, { action: 'note', session: sess, section: 't3', text: '소감' });
+  const other = pwLogin(deps, '31039', '이바다');
+  pcall(deps, { action: 'note', session: other, section: 't2', text: '남의 글' });
+  r = pcall(deps, { action: 'restore', session: sess });
+  eq(Object.keys(r.notes).sort(), ['t1', 't3'], '내 글만');
+  assert.ok(r.notes.t1.text.includes('새 이름') && !JSON.stringify(r).includes('남의 글'));
+  eq([r.pledged, r.pledgeDate], [true, '2026. 11. 27.'], '글의 서명 완료 줄로 서약 확인');
+  // 글 없이 서명 그림만 있는 경우
+  st.pledges.push({ id: '31039' });
+  r = pcall(deps, { action: 'restore', session: other });
+  eq([r.pledged, r.pledgeDate], [true, '']);
+  // 서명 완료 줄의 날짜가 비어 있던 옛 글(undefined)은 서약으로 보지 않음
+  const third = pwLogin(deps, '31038', '박구름');
+  pcall(deps, { action: 'note', session: third, section: 't1', text: '[1차시 기획] 31038 박구름\n서약서: undefined 서명 완료' });
+  assert.strictEqual(pcall(deps, { action: 'restore', session: third }).pledged, false);
+  assert.strictEqual(pcall(deps, { action: 'restore' }).code, 'BAD_REQUEST', '세션 없음');
+});
+
 test('좋아요(like): 우리 반 작품마다 누르기·취소, 여러 개, 내 작품·다른 반·명단 없음·닫힘은 거부, 현황에 지금 누른 것', () => {
   const { deps, st } = pwDeps();
   st.cfg.roster_required = false;
@@ -936,7 +963,7 @@ test('좋아요(like): 우리 반 작품마다 누르기·취소, 여러 개, �
 test('글·투표·현황은 구글 방식에서는 거부, 현황은 글 내용을 돌려주지 않음', () => {
   const g = makeDeps();
   g.st.cfg.auth_mode = 'google';
-  for (const a of ['note', 'like', 'status', 'pledge']) assert.strictEqual(call(g.deps, { action: a, idToken: A, section: 't1', text: 'a', votes: {} }).code, 'BAD_REQUEST', a);
+  for (const a of ['note', 'like', 'status', 'pledge', 'restore']) assert.strictEqual(call(g.deps, { action: a, idToken: A, section: 't1', text: 'a', votes: {} }).code, 'BAD_REQUEST', a);
   const { deps, st } = pwDeps();
   st.cfg.roster_required = false;
   const sess = pwLogin(deps, '31040', '김하늘');
